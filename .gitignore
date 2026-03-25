@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.pyo
+
+.DS_Store
+Thumbs.db
+
+docker/downloads/
+docker/geoserver_data/
+
+reports/*.csv
+
+.env
+.venv/
+venv/

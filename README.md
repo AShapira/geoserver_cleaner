@@ -1,0 +1,244 @@
+# GeoServer Store Report
+
+## Purpose
+
+`geoserver_store_report.py` generates a CSV inventory of data used by a GeoServer instance.
+
+It is intended for cases where a GeoServer installation has accumulated a large amount of data on disk and the user needs to understand:
+
+- which stores consume the most space
+- which layers belong to each store
+- where the data is stored on disk
+- how many files belong to each store
+- which folders or files under `data_dir/data` are no longer referenced by GeoServer
+
+The script is designed to run in the QGIS Python shell or any regular Python environment available on the GeoServer workstation.
+
+## What The Script Does
+
+The script combines two sources of information:
+
+1. GeoServer REST API metadata
+   - workspaces
+   - store names
+   - store types
+   - published layer names
+   - configured data paths
+
+2. Filesystem scanning
+   - resolves each store to a local Windows path
+   - calculates total size in bytes and GB
+   - counts files
+   - includes common sidecar files for single-file datasets such as GeoTIFF, Shapefile, and GeoPackage
+   - scans `data_dir/data` for orphaned folders and files not referenced by any discovered store
+
+The report contains one row per store, plus additional rows for orphaned data.
+
+## Supported Store Scenarios
+
+The script is built for the storage patterns described in this project:
+
+- `GeoTIFF`
+- `ImageMosaic`
+- `Shapefile`
+- `GeoPackage`
+
+It should also work for some other file-based stores if GeoServer exposes a usable file path through REST, but the main logic is optimized for the store types above.
+
+## Requirements
+
+- Windows machine with access to the GeoServer data directory
+- GeoServer REST API enabled
+- GeoServer URL, username, and password
+- Python available through QGIS shell or system Python
+
+The script uses only Python standard library modules. No external packages are required.
+
+## Configuration
+
+The script accepts command-line arguments. Most parameters also have environment variable defaults.
+
+### Required Inputs
+
+- `--geoserver-url`
+  GeoServer base URL, for example:
+  `http://server:8080/geoserver`
+
+- `--password`
+  GeoServer password
+
+- `--data-dir`
+  Path to the GeoServer data directory, not the `data` subfolder.
+  Example:
+  `D:\GeoServer\data_dir`
+
+### Optional Inputs
+
+- `--username`
+  GeoServer username
+  Default: `admin`
+
+- `--output-csv`
+  Output CSV file path
+  Default: `.\geoserver_store_report.csv`
+
+- `--timeout`
+  REST request timeout in seconds
+  Default: `60`
+
+- `--insecure`
+  Disables HTTPS certificate validation
+  Use only if GeoServer is exposed through HTTPS with an untrusted certificate
+
+### Environment Variables
+
+Instead of passing some values every time, the following environment variables can be used:
+
+- `GEOSERVER_URL`
+- `GEOSERVER_USER`
+- `GEOSERVER_PASSWORD`
+- `GEOSERVER_DATA_DIR`
+
+Command-line arguments override environment variable values.
+
+## Usage
+
+Example command:
+
+```powershell
+python geoserver_store_report.py `
+  --geoserver-url "http://server:8080/geoserver" `
+  --username "admin" `
+  --password "secret" `
+  --data-dir "D:\GeoServer\data_dir" `
+  --output-csv "D:\reports\geoserver_store_report.csv"
+```
+
+Example with insecure HTTPS:
+
+```powershell
+python geoserver_store_report.py `
+  --geoserver-url "https://server/geoserver" `
+  --username "admin" `
+  --password "secret" `
+  --data-dir "D:\GeoServer\data_dir" `
+  --output-csv "D:\reports\geoserver_store_report.csv" `
+  --insecure
+```
+
+## Output
+
+The script writes a CSV file with one row per store and additional rows for orphaned data.
+
+### CSV Columns
+
+- `row_kind`
+  `store` or `orphaned`
+
+- `workspace`
+  GeoServer workspace name for store rows
+
+- `store_name`
+  GeoServer store name
+
+- `store_type`
+  Store type as reported by GeoServer
+
+- `layer_names`
+  Comma-separated list of published layer names for the store
+
+- `configured_path`
+  Path or URL value extracted from GeoServer store configuration
+
+- `resolved_path`
+  Local Windows path used for filesystem scanning
+
+- `path_kind`
+  `directory`, `file`, `missing`, or empty if unresolved
+
+- `size_bytes`
+  Total size of the scanned store or orphaned item in bytes
+
+- `size_gb`
+  Total size in GB
+
+- `file_count`
+  Number of files counted for that row
+
+- `status`
+  Processing result for that row
+
+- `notes`
+  Additional explanation, especially for missing, unresolved, error, or orphaned rows
+
+## Status Values
+
+Typical `status` values:
+
+- `ok`
+  Store was resolved and scanned successfully
+
+- `missing`
+  Store path was resolved but does not exist on disk
+
+- `unresolved`
+  The script could not extract a usable filesystem path from the store configuration
+
+- `error`
+  The script encountered an exception while processing the store or scanning orphaned data
+
+- `orphaned`
+  File or directory under `data_dir/data` is not referenced by any discovered store
+
+## How Store Size Is Calculated
+
+### Directory-Based Stores
+
+For directory-based stores such as `ImageMosaic`, the script scans the entire directory recursively and sums all files under that directory.
+
+### File-Based Stores
+
+For file-based stores such as `GeoTIFF`, `Shapefile`, and `GeoPackage`, the script includes the main dataset and common sidecar files in the same folder.
+
+Examples:
+
+- GeoTIFF:
+  `.tif`, `.ovr`, `.aux.xml`, `.prj`, `.tfw`, and similar sidecar files
+
+- Shapefile:
+  `.shp`, `.shx`, `.dbf`, `.prj`, `.cpg`, `.qix`, and common related files with the same base name
+
+- GeoPackage:
+  `.gpkg` and common journal side files such as `-wal` and `-shm`
+
+## Orphaned Data Detection
+
+The script scans `data_dir/data` and compares its contents against all store paths that were successfully resolved.
+
+It reports:
+
+- orphaned directories not claimed by any store
+- orphaned files not claimed by any store
+- orphaned files located inside partially referenced directories
+
+This is useful for identifying abandoned GeoTIFFs, unused mosaic folders, or residual data left behind after old stores were removed from GeoServer.
+
+## Limitations
+
+- The script relies on GeoServer REST responses. If a store does not expose a usable path, it will be marked as `unresolved`.
+- The logic is focused on file-based storage under the GeoServer data directory. It is not intended for database-backed stores such as PostGIS.
+- Sidecar matching is based on common naming conventions. If a deployment uses unusual file structures, counts may need review.
+- Orphan detection is based on resolved store paths. If GeoServer references data outside the expected conventions, some results may need manual validation.
+
+## Recommended Workflow
+
+1. Run the script and sort the CSV by `size_bytes` descending.
+2. Review the largest `store` rows first.
+3. Review all `missing`, `unresolved`, and `error` rows.
+4. Review `orphaned` rows before deleting anything.
+5. Validate suspicious results manually in GeoServer and on disk before cleanup.
+
+## Files
+
+- [geoserver_store_report.py](c:\Alex\work\geoserver_cleaner\geoserver_store_report.py)
+- [README.md](c:\Alex\work\geoserver_cleaner\README.md)
