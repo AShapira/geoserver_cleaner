@@ -220,7 +220,10 @@ def list_store_refs(client: GeoServerClient, workspace: str, store_kind: str) ->
     payload = client.get_json(endpoint)
     root_key = "dataStores" if store_kind == "datastores" else "coverageStores"
     item_key = "dataStore" if store_kind == "datastores" else "coverageStore"
-    items = payload.get(root_key, {}).get(item_key)
+    container = payload.get(root_key)
+    if not isinstance(container, dict):
+        return []
+    items = container.get(item_key)
     names = []
     for item in as_list(items):
         if isinstance(item, dict) and item.get("name"):
@@ -280,7 +283,10 @@ def list_store_layers(
         )
         return []
 
-    items = payload.get(root_key, {}).get(item_key)
+    container = payload.get(root_key)
+    if not isinstance(container, dict):
+        return []
+    items = container.get(item_key)
     names = []
     for item in as_list(items):
         if isinstance(item, dict) and item.get("name"):
