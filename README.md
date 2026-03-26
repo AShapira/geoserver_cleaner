@@ -11,6 +11,7 @@ It is intended for cases where a GeoServer installation has accumulated a large 
 - where the data is stored on disk
 - how many files belong to each store
 - which folders or files under `data_dir/data` are no longer referenced by GeoServer
+- a user-friendly sortable HTML version of the same report
 
 The script is designed to run in the QGIS Python shell or any regular Python environment available on the GeoServer workstation.
 
@@ -32,7 +33,9 @@ The script combines two sources of information:
    - includes common sidecar files for single-file datasets such as GeoTIFF, Shapefile, and GeoPackage
    - scans `data_dir/data` for orphaned folders and files not referenced by any discovered store
 
-The report contains one row per store, plus additional rows for orphaned data.
+The script is hardened to continue when individual stores return bad REST responses. Those failures are logged and written as `error` rows instead of aborting the full report.
+
+The report contains one row per store, plus additional rows for orphaned data, and also writes a sortable HTML view.
 
 ## Supported Store Scenarios
 
@@ -82,6 +85,18 @@ The script accepts command-line arguments. Most parameters also have environment
   Output CSV file path
   Default: `.\geoserver_store_report.csv`
 
+- `--output-html`
+  Optional HTML output file path
+  Default: same as CSV output path but with `.html` extension
+
+- `--exclude-workspaces`
+  Optional comma-separated list of workspaces to exclude from the report
+  Stores from excluded workspaces are omitted from report rows, and data belonging to those workspaces is not marked as orphaned
+
+- `--log-level`
+  Logging level
+  Default: `INFO`
+
 - `--timeout`
   REST request timeout in seconds
   Default: `60`
@@ -114,6 +129,20 @@ python geoserver_store_report.py `
   --output-csv "D:\reports\geoserver_store_report.csv"
 ```
 
+Example excluding workspaces and writing both outputs explicitly:
+
+```powershell
+python geoserver_store_report.py `
+  --geoserver-url "http://server:8080/geoserver" `
+  --username "admin" `
+  --password "secret" `
+  --data-dir "D:\GeoServer\data_dir" `
+  --output-csv "D:\reports\geoserver_store_report.csv" `
+  --output-html "D:\reports\geoserver_store_report.html" `
+  --exclude-workspaces "workspace_a,workspace_b" `
+  --log-level INFO
+```
+
 Example with insecure HTTPS:
 
 ```powershell
@@ -128,7 +157,10 @@ python geoserver_store_report.py `
 
 ## Output
 
-The script writes a CSV file with one row per store and additional rows for orphaned data.
+The script writes:
+
+- a CSV file with one row per store and additional rows for orphaned data
+- a sortable HTML file with summary cards, filtering, and clickable column sorting
 
 ### CSV Columns
 
@@ -160,7 +192,7 @@ The script writes a CSV file with one row per store and additional rows for orph
   Total size of the scanned store or orphaned item in bytes
 
 - `size_gb`
-  Total size in GB
+  Total size in GB, rounded to 2 decimal places
 
 - `file_count`
   Number of files counted for that row
@@ -170,6 +202,18 @@ The script writes a CSV file with one row per store and additional rows for orph
 
 - `notes`
   Additional explanation, especially for missing, unresolved, error, or orphaned rows
+
+### HTML Report
+
+The HTML report is intended for manual review and cleanup planning.
+
+It includes:
+
+- summary cards for store count, orphan count, issue count, and tracked size
+- a searchable table
+- clickable column headers for sorting
+- status color coding for quick scanning
+- metadata showing the GeoServer URL, data directory, excluded workspaces, and generation time
 
 ## Status Values
 
@@ -215,6 +259,8 @@ Examples:
 
 The script scans `data_dir/data` and compares its contents against all store paths that were successfully resolved.
 
+If workspaces are excluded with `--exclude-workspaces`, stores from those workspaces are omitted from report rows and their data is not treated as orphaned.
+
 It reports:
 
 - orphaned directories not claimed by any store
@@ -226,6 +272,7 @@ This is useful for identifying abandoned GeoTIFFs, unused mosaic folders, or res
 ## Limitations
 
 - The script relies on GeoServer REST responses. If a store does not expose a usable path, it will be marked as `unresolved`.
+- If an individual store returns a bad or invalid REST response, the script logs the failure, records an `error` row when the workspace is included, and continues.
 - The logic is focused on file-based storage under the GeoServer data directory. It is not intended for database-backed stores such as PostGIS.
 - Sidecar matching is based on common naming conventions. If a deployment uses unusual file structures, counts may need review.
 - Orphan detection is based on resolved store paths. If GeoServer references data outside the expected conventions, some results may need manual validation.

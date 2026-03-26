@@ -9,6 +9,7 @@ docker/downloads/
 docker/geoserver_data/
 
 reports/*.csv
+reports/*.html
 
 .env
 .venv/

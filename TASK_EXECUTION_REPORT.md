@@ -351,3 +351,96 @@ The population helper was updated to:
 The updated helper script is:
 
 - [populate_geoserver_natural_earth.py](c:\Alex\work\geoserver_cleaner\populate_geoserver_natural_earth.py)
+
+## Report Refactor And Feature Update
+
+The reporting script was later refactored and extended with the following changes:
+
+- hardened handling of invalid GeoServer REST responses for individual stores and store lists
+- added logging for major execution steps
+- changed `size_gb` formatting to 2 decimal places
+- added `--exclude-workspaces` so specific workspaces can be omitted from report rows
+- prevented excluded workspaces from being treated as orphaned data
+- added a sortable HTML report with filtering and summary cards
+
+### Files Updated
+
+- [geoserver_store_report.py](c:\Alex\work\geoserver_cleaner\geoserver_store_report.py)
+- [README.md](c:\Alex\work\geoserver_cleaner\README.md)
+- [TASK_EXECUTION_REPORT.md](c:\Alex\work\geoserver_cleaner\TASK_EXECUTION_REPORT.md)
+- [tests\test_geoserver_store_report.py](c:\Alex\work\geoserver_cleaner\tests\test_geoserver_store_report.py)
+- [.github\workflows\ci.yml](c:\Alex\work\geoserver_cleaner\.github\workflows\ci.yml)
+
+### Automated Tests Added
+
+Unit tests were added for:
+
+- invalid store-list REST failures continuing without aborting the run
+- excluded workspaces not appearing in report rows and not becoming orphaned
+- `size_gb` formatting to 2 decimal places
+- HTML report generation and sortable UI markers
+
+Executed test command:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Observed result:
+
+```text
+Ran 4 tests in 0.059s
+OK
+```
+
+### Live Verification Against Docker GeoServer
+
+The refactored script was executed against the Docker test fixture.
+
+Normal run:
+
+```powershell
+python geoserver_store_report.py `
+  --geoserver-url http://localhost:8081/geoserver `
+  --username admin `
+  --password geoserver `
+  --data-dir .\docker\geoserver_data `
+  --output-csv .\reports\geoserver_store_report_test_refactored.csv `
+  --log-level INFO
+```
+
+Observed result:
+
+```text
+Wrote 4 store rows and 1 orphan rows to .\reports\geoserver_store_report_test_refactored.csv and C:\Alex\work\geoserver_cleaner\reports\geoserver_store_report_test_refactored.html
+```
+
+Generated outputs:
+
+- [geoserver_store_report_test_refactored.csv](c:\Alex\work\geoserver_cleaner\reports\geoserver_store_report_test_refactored.csv)
+- [geoserver_store_report_test_refactored.html](c:\Alex\work\geoserver_cleaner\reports\geoserver_store_report_test_refactored.html)
+
+Excluded workspace run:
+
+```powershell
+python geoserver_store_report.py `
+  --geoserver-url http://localhost:8081/geoserver `
+  --username admin `
+  --password geoserver `
+  --data-dir .\docker\geoserver_data `
+  --output-csv .\reports\geoserver_store_report_excluded.csv `
+  --exclude-workspaces naturalearth `
+  --log-level INFO
+```
+
+Observed result:
+
+```text
+Wrote 0 store rows and 1 orphan rows to .\reports\geoserver_store_report_excluded.csv and C:\Alex\work\geoserver_cleaner\reports\geoserver_store_report_excluded.html
+```
+
+This confirmed that:
+
+- the live catalog still reports correctly after the refactor
+- the HTML report is generated successfully
+- excluded workspace data is not marked as orphaned
