@@ -1,0 +1,21 @@
+<section
+  id="jobStatus"
+  class="job-card status-{{ job['status']|lower }}"
+  {% if job['status'] in ['queued', 'running'] %}
+  hx-get="/jobs/{{ job['id'] }}/status"
+  hx-trigger="every 3s"
+  hx-swap="outerHTML"
+  {% endif %}
+>
+  <dl class="job-grid">
+    <div><dt>Status</dt><dd>{{ job['status'] }}</dd></div>
+    <div><dt>Type</dt><dd>{{ job['job_type'] }}</dd></div>
+    <div><dt>Created</dt><dd>{{ job['created_at'] }}</dd></div>
+    <div><dt>Started</dt><dd>{{ job['started_at'] or '-' }}</dd></div>
+    <div><dt>Finished</dt><dd>{{ job['finished_at'] or '-' }}</dd></div>
+    <div><dt>Run</dt><dd>{{ job['run_id'] or '-' }}</dd></div>
+  </dl>
+  {% if job['error_text'] %}
+  <p class="error-block">{{ job['error_text'] }}</p>
+  {% endif %}
+</section>

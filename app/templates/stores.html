@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-shell" data-selection-root>
+  <section class="hero">
+    <div>
+      <p class="eyebrow">Inventory</p>
+      <h1>{{ app_title }}</h1>
+      <p class="lede">Review the latest GeoServer snapshot, select stores, preview the deletion plan, and refresh the inventory after cleanup.</p>
+    </div>
+    <div class="action-row">
+      <form action="/scan" method="post">
+        <button class="primary-button" type="submit">Recalculate Inventory</button>
+      </form>
+      <a class="ghost-button" href="/stores">Reset View</a>
+    </div>
+  </section>
+
+  {% if running_jobs %}
+  <section class="notice-panel">
+    <strong>Background job in progress.</strong>
+    {% for job in running_jobs %}
+    <span><a href="/jobs/{{ job['id'] }}">Job #{{ job['id'] }}</a> {{ job['message'] }}</span>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  <section class="summary-grid">
+    <article class="summary-card">
+      <span class="label">Latest Snapshot</span>
+      <strong class="value">{% if summary %}#{{ summary.id }}{% else %}None{% endif %}</strong>
+      <span class="caption">{% if summary %}{{ summary.finished_at }}{% else %}Run a scan to populate the cache{% endif %}</span>
+    </article>
+    <article class="summary-card">
+      <span class="label">Stores</span>
+      <strong class="value">{% if summary %}{{ summary.store_count }}{% else %}0{% endif %}</strong>
+      <span class="caption">Store rows in the current snapshot</span>
+    </article>
+    <article class="summary-card">
+      <span class="label">Orphans</span>
+      <strong class="value">{% if summary %}{{ summary.orphan_count }}{% else %}0{% endif %}</strong>
+      <span class="caption">Unreferenced files and directories</span>
+    </article>
+    <article class="summary-card">
+      <span class="label">Tracked Size</span>
+      <strong class="value">{% if summary %}{{ summary.tracked_size_gb }} GB{% else %}0.00 GB{% endif %}</strong>
+      <span class="caption">Sum of store rows with status <code>ok</code></span>
+    </article>
+  </section>
+
+  <section class="meta-grid">
+    <article class="meta-card">
+      <strong>GeoServer</strong>
+      <span>{{ summary.geoserver_url if summary else request.app.state.settings.geoserver_url }}</span>
+    </article>
+    <article class="meta-card">
+      <strong>Data Directory</strong>
+      <span>{{ summary.data_dir if summary else request.app.state.settings.data_dir }}</span>
+    </article>
+    <article class="meta-card">
+      <strong>Physical Delete</strong>
+      <span>{% if physical_delete_enabled %}Enabled{% else %}Disabled{% endif %}</span>
+    </article>
+  </section>
+
+  <section class="bulk-panel">
+    <form action="/delete/preview" method="post" id="selectionForm">
+      <input type="hidden" name="selected_ids" value="" data-selection-target>
+      <div class="bulk-panel-copy">
+        <strong>Selected stores</strong>
+        <span data-selection-count>0 selected</span>
+      </div>
+      <button class="primary-button" type="submit" data-selection-submit disabled>Preview Delete</button>
+    </form>
+  </section>
+
+  {% if latest_run %}
+  <section class="filters-panel">
+    <form
+      id="filtersForm"
+      action="/stores"
+      method="get"
+      hx-get="/stores/table"
+      hx-target="#storesTableShell"
+      hx-push-url="true"
+      hx-swap="innerHTML"
+    >
+      <div class="filters-grid">
+        <input type="search" name="q" value="{{ table_state.query }}" placeholder="Search workspace, store, path, or notes">
+        <select name="workspace">
+          <option value="">All workspaces</option>
+          {% for item in table_state.filters.workspaces %}
+          <option value="{{ item }}" {% if item == table_state.workspace %}selected{% endif %}>{{ item }}</option>
+          {% endfor %}
+        </select>
+        <select name="status">
+          <option value="">All statuses</option>
+          {% for item in table_state.filters.statuses %}
+          <option value="{{ item }}" {% if item == table_state.status %}selected{% endif %}>{{ item }}</option>
+          {% endfor %}
+        </select>
+        <select name="row_kind">
+          <option value="">All row kinds</option>
+          {% for item in table_state.filters.row_kinds %}
+          <option value="{{ item }}" {% if item == table_state.row_kind %}selected{% endif %}>{{ item }}</option>
+          {% endfor %}
+        </select>
+        <select name="store_type">
+          <option value="">All store types</option>
+          {% for item in table_state.filters.store_types %}
+          <option value="{{ item }}" {% if item == table_state.store_type %}selected{% endif %}>{{ item }}</option>
+          {% endfor %}
+        </select>
+        <select name="page_size">
+          {% for item in [50, 100, 250, 500] %}
+          <option value="{{ item }}" {% if item == table_state.page_size %}selected{% endif %}>{{ item }} per page</option>
+          {% endfor %}
+        </select>
+      </div>
+      <input type="hidden" name="sort_by" value="{{ table_state.sort_by }}">
+      <input type="hidden" name="sort_dir" value="{{ table_state.sort_dir }}">
+      <input type="hidden" name="page" value="1">
+    </form>
+  </section>
+
+  <section id="storesTableShell">
+    {% include "_stores_table.html" %}
+  </section>
+  {% else %}
+  <section class="empty-panel">
+    <h2>No inventory snapshot yet</h2>
+    <p>Run the first scan to load GeoServer contents into the application database.</p>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

@@ -14,3 +14,4 @@ reports/*.html
 .env
 .venv/
 venv/
+app_data/

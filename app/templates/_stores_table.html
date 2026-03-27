@@ -1,0 +1,55 @@
+<div class="table-panel">
+  <div class="table-toolbar">
+    <div class="table-summary">
+      Showing {{ table_state.rows|length }} rows on page {{ table_state.page }} of {{ table_state.total_pages }}.
+      {{ table_state.total }} filtered row(s) in total.
+    </div>
+    <div class="pager">
+      <a class="ghost-button {% if table_state.page == 1 %}disabled-link{% endif %}" href="{{ table_state.page_links.first }}" hx-get="{{ table_state.page_links.first }}" hx-target="#storesTableShell" hx-push-url="true">First</a>
+      <a class="ghost-button {% if table_state.page == 1 %}disabled-link{% endif %}" href="{{ table_state.page_links.prev }}" hx-get="{{ table_state.page_links.prev }}" hx-target="#storesTableShell" hx-push-url="true">Previous</a>
+      <a class="ghost-button {% if table_state.page == table_state.total_pages %}disabled-link{% endif %}" href="{{ table_state.page_links.next }}" hx-get="{{ table_state.page_links.next }}" hx-target="#storesTableShell" hx-push-url="true">Next</a>
+      <a class="ghost-button {% if table_state.page == table_state.total_pages %}disabled-link{% endif %}" href="{{ table_state.page_links.last }}" hx-get="{{ table_state.page_links.last }}" hx-target="#storesTableShell" hx-push-url="true">Last</a>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="stores-table">
+      <thead>
+        <tr>
+          <th class="checkbox-col"><input type="checkbox" data-select-page></th>
+          <th><a href="{{ table_state.sort_links.row_kind }}" hx-get="{{ table_state.sort_links.row_kind }}" hx-target="#storesTableShell" hx-push-url="true">Row</a></th>
+          <th><a href="{{ table_state.sort_links.workspace }}" hx-get="{{ table_state.sort_links.workspace }}" hx-target="#storesTableShell" hx-push-url="true">Workspace</a></th>
+          <th><a href="{{ table_state.sort_links.store_name }}" hx-get="{{ table_state.sort_links.store_name }}" hx-target="#storesTableShell" hx-push-url="true">Store</a></th>
+          <th><a href="{{ table_state.sort_links.store_type }}" hx-get="{{ table_state.sort_links.store_type }}" hx-target="#storesTableShell" hx-push-url="true">Type</a></th>
+          <th>Layers</th>
+          <th>Resolved Path</th>
+          <th><a href="{{ table_state.sort_links.size_bytes }}" hx-get="{{ table_state.sort_links.size_bytes }}" hx-target="#storesTableShell" hx-push-url="true">Size (GB)</a></th>
+          <th><a href="{{ table_state.sort_links.file_count }}" hx-get="{{ table_state.sort_links.file_count }}" hx-target="#storesTableShell" hx-push-url="true">Files</a></th>
+          <th><a href="{{ table_state.sort_links.status }}" hx-get="{{ table_state.sort_links.status }}" hx-target="#storesTableShell" hx-push-url="true">Status</a></th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in table_state.rows %}
+        <tr class="status-{{ row['status']|lower }} row-kind-{{ row['row_kind']|lower }}">
+          <td class="checkbox-col">
+            {% if row['row_kind'] == 'store' %}
+            <input type="checkbox" value="{{ row['id'] }}" data-store-checkbox>
+            {% endif %}
+          </td>
+          <td>{{ row['row_kind'] }}</td>
+          <td>{{ row['workspace'] }}</td>
+          <td>{{ row['store_name'] }}</td>
+          <td>{{ row['store_type'] }}</td>
+          <td class="truncate">{{ row['layer_names'] }}</td>
+          <td class="truncate mono">{{ row['resolved_path'] }}</td>
+          <td class="mono">{{ row['size_gb'] }}</td>
+          <td class="mono">{{ row['file_count'] }}</td>
+          <td><span class="status-pill">{{ row['status'] }}</span></td>
+          <td class="truncate">{{ row['notes'] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
