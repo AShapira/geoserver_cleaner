@@ -9,6 +9,7 @@ It uses only the standard library so it does not depend on third-party modules.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 import html
 import json
@@ -18,7 +19,7 @@ import re
 import ssl
 import sys
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, urljoin
@@ -29,6 +30,7 @@ from urllib.request import (
     Request,
     build_opener,
 )
+from xml.etree import ElementTree
 
 
 SHAPEFILE_EXTENSIONS = {
@@ -102,6 +104,25 @@ class ScanResult:
     referenced_files: Set[str]
 
 
+@dataclass
+class CatalogStore:
+    workspace: str
+    store_name: str
+    store_kind: str
+    store_type: str
+    configured_path: str
+    layer_names: str
+    status: str = "ok"
+    notes: str = ""
+
+
+@dataclass
+class ProcessedStore:
+    row: dict
+    referenced_root: str = ""
+    referenced_files: Set[str] = field(default_factory=set)
+
+
 def configure_logging(level_name: str) -> None:
     logging.basicConfig(
         level=getattr(logging, level_name.upper(), logging.INFO),
@@ -144,6 +165,11 @@ def entries_to_dict(entries) -> Dict[str, str]:
 
 def parse_excluded_workspaces(raw: str) -> Set[str]:
     return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+
+def worker_default() -> int:
+    cpu_count = os.cpu_count() or 4
+    return max(4, min(16, cpu_count * 2))
 
 
 class GeoServerClient:
@@ -345,6 +371,170 @@ def resolve_store_path(configured_path: str, data_dir: str) -> str:
         return os.path.abspath(os.path.join(data_dir, "data", relative))
 
     return os.path.abspath(os.path.join(data_dir, value))
+
+
+def parse_xml_file(path: str) -> ElementTree.Element:
+    try:
+        tree = ElementTree.parse(path)
+    except (OSError, ElementTree.ParseError) as exc:
+        raise RuntimeError("Failed to parse XML {}: {}".format(path, exc)) from exc
+    return tree.getroot()
+
+
+def xml_text(element: Optional[ElementTree.Element], tag_name: str, default: str = "") -> str:
+    if element is None:
+        return default
+    value = element.findtext(tag_name)
+    if value is None:
+        return default
+    return str(value).strip()
+
+
+def xml_connection_parameters(root: ElementTree.Element) -> Dict[str, str]:
+    params: Dict[str, str] = {}
+    connection_parameters = root.find("connectionParameters")
+    if connection_parameters is None:
+        return params
+    for entry in connection_parameters.findall("entry"):
+        key = (entry.get("key") or "").strip()
+        if not key:
+            continue
+        value = "".join(entry.itertext()).strip()
+        params[key] = value
+    return params
+
+
+def extract_datastore_path_from_params(params: Dict[str, str]) -> str:
+    for key in ("url", "database", "file", "path"):
+        value = (params.get(key) or "").strip()
+        if value:
+            return value
+
+    candidates = []
+    for value in params.values():
+        candidate = (value or "").strip()
+        if not candidate:
+            continue
+        lower = candidate.lower()
+        if lower.startswith("file:") or re.match(r"^[a-z]:[\\/]", candidate, re.I) or candidate.startswith("\\\\"):
+            candidates.append(candidate)
+    return candidates[0] if candidates else ""
+
+
+def collect_layer_names_from_store_dir(store_dir: str, layer_file_name: str, fallback_name: str) -> str:
+    layer_names: List[str] = []
+    try:
+        entries = sorted(os.scandir(store_dir), key=lambda entry: entry.name.lower())
+    except OSError as exc:
+        raise RuntimeError("Failed to inspect store directory {}: {}".format(store_dir, exc)) from exc
+
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        layer_xml_path = os.path.join(entry.path, layer_file_name)
+        if not os.path.isfile(layer_xml_path):
+            continue
+        try:
+            layer_root = parse_xml_file(layer_xml_path)
+            layer_name = xml_text(layer_root, "name", entry.name)
+        except RuntimeError:
+            layer_name = entry.name
+        if layer_name:
+            layer_names.append(layer_name)
+
+    if not layer_names and fallback_name:
+        layer_names.append(fallback_name)
+    return ", ".join(sorted(set(layer_names)))
+
+
+def read_catalog_store(store_dir: str, workspace: str) -> CatalogStore:
+    datastore_xml = os.path.join(store_dir, "datastore.xml")
+    coveragestore_xml = os.path.join(store_dir, "coveragestore.xml")
+    store_name = os.path.basename(store_dir)
+
+    if os.path.isfile(datastore_xml):
+        root = parse_xml_file(datastore_xml)
+        parsed_store_name = xml_text(root, "name", store_name) or store_name
+        store_type = xml_text(root, "type")
+        configured_path = extract_datastore_path_from_params(xml_connection_parameters(root))
+        layer_names = collect_layer_names_from_store_dir(store_dir, "featuretype.xml", parsed_store_name)
+        return CatalogStore(
+            workspace=workspace,
+            store_name=parsed_store_name,
+            store_kind="datastores",
+            store_type=store_type,
+            configured_path=configured_path,
+            layer_names=layer_names,
+        )
+
+    if os.path.isfile(coveragestore_xml):
+        root = parse_xml_file(coveragestore_xml)
+        parsed_store_name = xml_text(root, "name", store_name) or store_name
+        store_type = xml_text(root, "type")
+        configured_path = xml_text(root, "url")
+        layer_names = collect_layer_names_from_store_dir(store_dir, "coverage.xml", parsed_store_name)
+        if not layer_names and store_type.lower() == "geotiff":
+            layer_names = parsed_store_name
+        return CatalogStore(
+            workspace=workspace,
+            store_name=parsed_store_name,
+            store_kind="coveragestores",
+            store_type=store_type,
+            configured_path=configured_path,
+            layer_names=layer_names,
+        )
+
+    raise RuntimeError("No datastore.xml or coveragestore.xml found in {}".format(store_dir))
+
+
+def list_catalog_workspaces(data_dir: str) -> Tuple[List[str], List[CatalogStore]]:
+    workspaces_root = os.path.join(data_dir, "workspaces")
+    if not os.path.isdir(workspaces_root):
+        raise RuntimeError("GeoServer workspaces directory does not exist: {}".format(workspaces_root))
+
+    workspace_names: List[str] = []
+    catalog_stores: List[CatalogStore] = []
+
+    for entry in sorted(os.scandir(workspaces_root), key=lambda item: item.name.lower()):
+        if not entry.is_dir():
+            continue
+        workspace_dir = entry.path
+        workspace_xml = os.path.join(workspace_dir, "workspace.xml")
+        workspace = entry.name
+        if os.path.isfile(workspace_xml):
+            try:
+                workspace_root = parse_xml_file(workspace_xml)
+                workspace = xml_text(workspace_root, "name", entry.name) or entry.name
+            except RuntimeError as exc:
+                LOGGER.warning("Failed to parse workspace XML %s: %s", workspace_xml, exc)
+        workspace_names.append(workspace)
+
+        for store_entry in sorted(os.scandir(workspace_dir), key=lambda item: item.name.lower()):
+            if not store_entry.is_dir():
+                continue
+            store_dir = store_entry.path
+            if not (
+                os.path.isfile(os.path.join(store_dir, "datastore.xml"))
+                or os.path.isfile(os.path.join(store_dir, "coveragestore.xml"))
+            ):
+                continue
+            try:
+                catalog_stores.append(read_catalog_store(store_dir, workspace))
+            except Exception as exc:
+                catalog_stores.append(
+                    CatalogStore(
+                        workspace=workspace,
+                        store_name=store_entry.name,
+                        store_kind="",
+                        store_type="",
+                        configured_path="",
+                        layer_names="",
+                        status="error",
+                        notes=str(exc),
+                    )
+                )
+
+    return workspace_names, catalog_stores
 
 
 def scan_directory(path: str) -> ScanResult:
@@ -672,35 +862,18 @@ def build_error_row(
     )
 
 
-def inventory_stores(
-    client: GeoServerClient,
-    data_dir: str,
-    excluded_workspaces: Set[str],
-) -> Tuple[List[dict], List[str], Set[str]]:
-    rows: List[dict] = []
-    referenced_roots: List[str] = []
-    referenced_files: Set[str] = set()
+def collect_rest_catalog(client: Optional[GeoServerClient], data_dir: str) -> Tuple[List[str], List[CatalogStore], List[dict]]:
+    workspace_names = list_workspaces(client)
+    LOGGER.info("Discovered %d workspace(s) via REST", len(workspace_names))
+    catalog_stores: List[CatalogStore] = []
+    error_rows: List[dict] = []
 
-    workspaces = list_workspaces(client)
-    LOGGER.info("Discovered %d workspace(s)", len(workspaces))
-
-    for workspace in workspaces:
-        workspace_excluded = workspace.lower() in excluded_workspaces
-        if workspace_excluded:
-            LOGGER.info("Workspace %s is excluded from report rows", workspace)
-            fallback_root = os.path.join(data_dir, "data", workspace)
-            if os.path.isdir(fallback_root):
-                referenced_roots.append(normalize_path(fallback_root))
-                LOGGER.info(
-                    "Marked excluded workspace root as referenced: %s",
-                    fallback_root,
-                )
-
+    for workspace in workspace_names:
         for store_kind in ("coveragestores", "datastores"):
             try:
                 store_names = list_store_refs(client, workspace, store_kind)
                 LOGGER.info(
-                    "Workspace %s: discovered %d %s",
+                    "Workspace %s: discovered %d %s via REST",
                     workspace,
                     len(store_names),
                     store_kind,
@@ -712,131 +885,218 @@ def inventory_stores(
                     workspace,
                     exc,
                 )
-                if not workspace_excluded:
-                    rows.append(
-                        build_error_row(
-                            workspace=workspace,
-                            store_name="",
-                            status="error",
-                            notes="Failed to list {}: {}".format(store_kind, exc),
-                        )
+                error_rows.append(
+                    build_error_row(
+                        workspace=workspace,
+                        store_name="",
+                        status="error",
+                        notes="Failed to list {}: {}".format(store_kind, exc),
                     )
+                )
                 continue
 
             for store_name in store_names:
-                LOGGER.info(
-                    "Processing workspace=%s kind=%s store=%s",
-                    workspace,
-                    store_kind,
-                    store_name,
-                )
                 try:
                     detail = get_store_detail(client, workspace, store_kind, store_name)
                     store_type = str(detail.get("type", "")).strip()
                     configured_path = extract_store_path(detail, store_kind)
-                    resolved_path = resolve_store_path(configured_path, data_dir)
-                    layer_names = ", ".join(list_store_layers(client, workspace, store_kind, store_name))
-
-                    if not configured_path:
-                        LOGGER.warning(
-                            "Store %s/%s has no usable filesystem path",
-                            workspace,
-                            store_name,
-                        )
-                        if not workspace_excluded:
-                            rows.append(
-                                build_row(
-                                    row_kind="store",
-                                    workspace=workspace,
-                                    store_name=store_name,
-                                    store_type=store_type,
-                                    layer_names=layer_names,
-                                    configured_path="",
-                                    resolved_path="",
-                                    path_kind="",
-                                    size_bytes=0,
-                                    file_count=0,
-                                    status="unresolved",
-                                    notes="Could not find a usable filesystem path in store configuration.",
-                                )
-                            )
-                        continue
-
-                    if not os.path.exists(resolved_path):
-                        LOGGER.warning(
-                            "Resolved path missing for store %s/%s: %s",
-                            workspace,
-                            store_name,
-                            resolved_path,
-                        )
-                        if not workspace_excluded:
-                            rows.append(
-                                build_row(
-                                    row_kind="store",
-                                    workspace=workspace,
-                                    store_name=store_name,
-                                    store_type=store_type,
-                                    layer_names=layer_names,
-                                    configured_path=configured_path,
-                                    resolved_path=resolved_path,
-                                    path_kind="missing",
-                                    size_bytes=0,
-                                    file_count=0,
-                                    status="missing",
-                                    notes="Resolved path does not exist on disk.",
-                                )
-                            )
-                        continue
-
-                    scan = scan_any_path(resolved_path, store_type)
-                    path_kind = "directory" if os.path.isdir(resolved_path) else "file"
-                    if path_kind == "directory":
-                        referenced_roots.append(normalize_path(resolved_path))
+                    if store_kind == "coveragestores" and store_type.lower() == "geotiff":
+                        layer_names = store_name
                     else:
-                        referenced_files.update(scan.referenced_files)
-
-                    LOGGER.info(
-                        "Scanned store %s/%s: %s file(s), %s GB",
-                        workspace,
-                        store_name,
-                        scan.file_count,
-                        bytes_to_gb(scan.size_bytes),
-                    )
-                    if not workspace_excluded:
-                        rows.append(
-                            build_row(
-                                row_kind="store",
-                                workspace=workspace,
-                                store_name=store_name,
-                                store_type=store_type,
-                                layer_names=layer_names,
-                                configured_path=configured_path,
-                                resolved_path=resolved_path,
-                                path_kind=path_kind,
-                                size_bytes=scan.size_bytes,
-                                file_count=scan.file_count,
-                                status="ok",
-                                notes="",
-                            )
+                        layer_names = ", ".join(list_store_layers(client, workspace, store_kind, store_name))
+                    catalog_stores.append(
+                        CatalogStore(
+                            workspace=workspace,
+                            store_name=store_name,
+                            store_kind=store_kind,
+                            store_type=store_type,
+                            configured_path=configured_path,
+                            layer_names=layer_names,
                         )
+                    )
                 except Exception as exc:
                     LOGGER.warning(
-                        "Failed to process workspace=%s kind=%s store=%s: %s",
+                        "Failed to collect REST metadata for workspace=%s kind=%s store=%s: %s",
                         workspace,
                         store_kind,
                         store_name,
                         exc,
                     )
-                    if not workspace_excluded:
-                        rows.append(
-                            build_error_row(
-                                workspace=workspace,
-                                store_name=store_name,
-                                store_type="",
-                                status="error",
-                                notes=str(exc),
-                            )
+                    error_rows.append(
+                        build_error_row(
+                            workspace=workspace,
+                            store_name=store_name,
+                            store_type="",
+                            status="error",
+                            notes=str(exc),
                         )
+                    )
+
+    return workspace_names, catalog_stores, error_rows
+
+
+def process_catalog_store(catalog_store: CatalogStore, data_dir: str) -> ProcessedStore:
+    if catalog_store.status != "ok":
+        return ProcessedStore(
+            row=build_error_row(
+                workspace=catalog_store.workspace,
+                store_name=catalog_store.store_name,
+                store_type=catalog_store.store_type,
+                status=catalog_store.status,
+                notes=catalog_store.notes,
+            )
+        )
+
+    configured_path = catalog_store.configured_path
+    resolved_path = resolve_store_path(configured_path, data_dir)
+
+    if not configured_path:
+        return ProcessedStore(
+            row=build_row(
+                row_kind="store",
+                workspace=catalog_store.workspace,
+                store_name=catalog_store.store_name,
+                store_type=catalog_store.store_type,
+                layer_names=catalog_store.layer_names,
+                configured_path="",
+                resolved_path="",
+                path_kind="",
+                size_bytes=0,
+                file_count=0,
+                status="unresolved",
+                notes="Could not find a usable filesystem path in store configuration.",
+            )
+        )
+
+    if not os.path.exists(resolved_path):
+        return ProcessedStore(
+            row=build_row(
+                row_kind="store",
+                workspace=catalog_store.workspace,
+                store_name=catalog_store.store_name,
+                store_type=catalog_store.store_type,
+                layer_names=catalog_store.layer_names,
+                configured_path=configured_path,
+                resolved_path=resolved_path,
+                path_kind="missing",
+                size_bytes=0,
+                file_count=0,
+                status="missing",
+                notes="Resolved path does not exist on disk.",
+            )
+        )
+
+    scan = scan_any_path(resolved_path, catalog_store.store_type)
+    path_kind = "directory" if os.path.isdir(resolved_path) else "file"
+    return ProcessedStore(
+        row=build_row(
+            row_kind="store",
+            workspace=catalog_store.workspace,
+            store_name=catalog_store.store_name,
+            store_type=catalog_store.store_type,
+            layer_names=catalog_store.layer_names,
+            configured_path=configured_path,
+            resolved_path=resolved_path,
+            path_kind=path_kind,
+            size_bytes=scan.size_bytes,
+            file_count=scan.file_count,
+            status="ok",
+            notes="",
+        ),
+        referenced_root=normalize_path(resolved_path) if path_kind == "directory" else "",
+        referenced_files=scan.referenced_files if path_kind == "file" else set(),
+    )
+
+
+def inventory_stores(
+    client: Optional[GeoServerClient],
+    data_dir: str,
+    excluded_workspaces: Set[str],
+    catalog_source: str = "auto",
+    workers: Optional[int] = None,
+) -> Tuple[List[dict], List[str], Set[str]]:
+    rows: List[dict] = []
+    referenced_roots: List[str] = []
+    referenced_files: Set[str] = set()
+
+    catalog_source_normalized = (catalog_source or "auto").lower()
+    if catalog_source_normalized not in {"auto", "filesystem", "rest"}:
+        raise RuntimeError("Unsupported catalog source: {}".format(catalog_source))
+
+    workspace_names: List[str]
+    catalog_stores: List[CatalogStore]
+    if catalog_source_normalized in {"auto", "filesystem"}:
+        try:
+            workspace_names, catalog_stores = list_catalog_workspaces(data_dir)
+            LOGGER.info(
+                "Discovered %d workspace(s) and %d store(s) via filesystem catalog",
+                len(workspace_names),
+                len(catalog_stores),
+            )
+        except Exception as exc:
+            if catalog_source_normalized == "filesystem":
+                raise
+            LOGGER.warning("Filesystem catalog discovery failed, falling back to REST: %s", exc)
+            workspace_names, catalog_stores, rows = collect_rest_catalog(client, data_dir)
+        else:
+            rows = []
+    else:
+        workspace_names, catalog_stores, rows = collect_rest_catalog(client, data_dir)
+
+    for workspace in workspace_names:
+        if workspace.lower() in excluded_workspaces:
+            LOGGER.info("Workspace %s is excluded from report rows", workspace)
+            fallback_root = os.path.join(data_dir, "data", workspace)
+            if os.path.isdir(fallback_root):
+                referenced_roots.append(normalize_path(fallback_root))
+
+    included_stores = [
+        catalog_store
+        for catalog_store in catalog_stores
+        if catalog_store.workspace.lower() not in excluded_workspaces
+    ]
+    skipped_stores = len(catalog_stores) - len(included_stores)
+    if skipped_stores:
+        LOGGER.info("Skipped %d store(s) because their workspace is excluded", skipped_stores)
+
+    max_workers = workers or worker_default()
+    completed = 0
+    log_interval = 500 if len(included_stores) >= 1000 else 100
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {
+            executor.submit(process_catalog_store, catalog_store, data_dir): catalog_store
+            for catalog_store in included_stores
+        }
+        for future in as_completed(future_map):
+            catalog_store = future_map[future]
+            try:
+                processed = future.result()
+            except Exception as exc:
+                LOGGER.warning(
+                    "Failed to process workspace=%s kind=%s store=%s: %s",
+                    catalog_store.workspace,
+                    catalog_store.store_kind,
+                    catalog_store.store_name,
+                    exc,
+                )
+                rows.append(
+                    build_error_row(
+                        workspace=catalog_store.workspace,
+                        store_name=catalog_store.store_name,
+                        store_type=catalog_store.store_type,
+                        status="error",
+                        notes=str(exc),
+                    )
+                )
+            else:
+                rows.append(processed.row)
+                if processed.referenced_root:
+                    referenced_roots.append(processed.referenced_root)
+                if processed.referenced_files:
+                    referenced_files.update(processed.referenced_files)
+            completed += 1
+            if completed == 1 or completed % log_interval == 0 or completed == len(included_stores):
+                LOGGER.info("Processed %d/%d store(s)", completed, len(included_stores))
 
     return rows, referenced_roots, referenced_files
 
@@ -848,11 +1108,11 @@ def derive_output_html_path(output_csv: str, output_html: str) -> str:
     return base + ".html"
 
 
-def validate_args(args: argparse.Namespace) -> None:
+def validate_args(args: argparse.Namespace, catalog_source: str) -> None:
     missing = []
-    if not args.geoserver_url:
+    if catalog_source == "rest" and not args.geoserver_url:
         missing.append("--geoserver-url")
-    if not args.password:
+    if catalog_source == "rest" and not args.password:
         missing.append("--password")
     if not args.data_dir:
         missing.append("--data-dir")
@@ -889,24 +1149,16 @@ def build_html_summary(rows: Sequence[dict], excluded_workspaces: Sequence[str])
     }
 
 
-def render_html_table_rows(rows: Sequence[dict]) -> str:
-    rendered_rows = []
+def json_for_html_script(value) -> str:
+    return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
+
+
+def build_html_row_payload(rows: Sequence[dict]) -> List[dict]:
+    payload: List[dict] = []
+    keys = [column[0] for column in HTML_COLUMNS]
     for row in rows:
-        status_class = "status-" + str(row["status"]).lower()
-        cells = []
-        for key, _, sort_type in HTML_COLUMNS:
-            value = row.get(key, "")
-            display = html.escape(str(value))
-            sort_value = str(value if sort_type == "number" else str(value).lower())
-            cells.append(
-                '<td data-key="{key}" data-value="{sort_value}">{display}</td>'.format(
-                    key=html.escape(key),
-                    sort_value=html.escape(sort_value),
-                    display=display,
-                )
-            )
-        rendered_rows.append('<tr class="report-row {}">{}</tr>'.format(status_class, "".join(cells)))
-    return "\n".join(rendered_rows)
+        payload.append({key: row.get(key, "") for key in keys})
+    return payload
 
 
 def write_html_report(
@@ -930,6 +1182,10 @@ def write_html_report(
                 label=html.escape(label),
             )
         )
+    column_data = json_for_html_script(
+        [{"key": key, "label": label, "type": sort_type} for key, label, sort_type in HTML_COLUMNS]
+    )
+    row_data = json_for_html_script(build_html_row_payload(rows))
 
     html_text = """<!doctype html>
 <html lang="en">
@@ -1004,21 +1260,84 @@ def write_html_report(
     }}
     .meta-card strong {{ display: block; margin-bottom: 0.35rem; }}
     .toolbar {{
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(0, 1.7fr) minmax(18rem, 1fr);
       gap: 1rem;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
+      align-items: end;
       margin: 1.5rem 0 1rem;
     }}
-    .toolbar .hint {{ color: var(--muted); font-size: 0.95rem; }}
+    .toolbar-copy .hint {{ color: var(--muted); font-size: 0.95rem; line-height: 1.5; }}
+    .toolbar-actions {{
+      display: flex;
+      gap: 0.9rem;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+    }}
     .search {{
-      min-width: min(28rem, 100%);
+      flex: 1 1 18rem;
+      min-width: min(24rem, 100%);
       padding: 0.85rem 1rem;
       border: 1px solid var(--line);
       border-radius: 999px;
       background: rgba(255,255,255,0.85);
       font: inherit;
+    }}
+    .page-size-shell {{
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55rem;
+      padding: 0.35rem 0.35rem 0.35rem 0.9rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.85);
+      color: var(--muted);
+      font-size: 0.95rem;
+      white-space: nowrap;
+    }}
+    .page-size {{
+      border: 0;
+      background: transparent;
+      color: var(--ink);
+      font: inherit;
+      padding-right: 0.2rem;
+    }}
+    .results-bar {{
+      display: flex;
+      gap: 0.9rem;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.85rem;
+    }}
+    .result-summary {{
+      color: var(--muted);
+      font-size: 0.95rem;
+    }}
+    .pager {{
+      display: flex;
+      gap: 0.55rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }}
+    .pager-button {{
+      padding: 0.6rem 0.85rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.92);
+      color: var(--ink);
+      font: inherit;
+      cursor: pointer;
+    }}
+    .pager-button:disabled {{
+      opacity: 0.45;
+      cursor: not-allowed;
+    }}
+    .page-status {{
+      min-width: 7rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.95rem;
     }}
     .table-shell {{
       overflow: auto;
@@ -1059,6 +1378,20 @@ def write_html_report(
     th[data-direction="asc"] .sort-indicator::after {{ content: "↑"; }}
     th[data-direction="desc"] .sort-indicator::after {{ content: "↓"; }}
     .empty-state {{ padding: 1rem 0; color: var(--muted); }}
+    @media (max-width: 920px) {{
+      .toolbar {{
+        grid-template-columns: 1fr;
+      }}
+      .toolbar-actions {{
+        justify-content: stretch;
+      }}
+      .search {{
+        min-width: 100%;
+      }}
+      .results-bar {{
+        align-items: stretch;
+      }}
+    }}
   </style>
 </head>
 <body>
@@ -1082,62 +1415,184 @@ def write_html_report(
       </div>
     </section>
     <div class="toolbar">
-      <div class="hint">Statuses are color coded: green for scanned stores, amber for unresolved or missing paths, red for failures, and violet for orphaned data.</div>
-      <input id="rowFilter" class="search" type="search" placeholder="Filter rows by workspace, store, path, status, or notes">
+      <div class="toolbar-copy">
+        <div class="hint">Statuses are color coded: green for scanned stores, amber for unresolved or missing paths, red for failures, and violet for orphaned data. Large reports stay responsive because the table renders one page at a time.</div>
+      </div>
+      <div class="toolbar-actions">
+        <input id="rowFilter" class="search" type="search" placeholder="Filter rows by workspace, store, path, status, or notes">
+        <label class="page-size-shell">Rows per page
+          <select id="pageSize" class="page-size">
+            <option value="50">50</option>
+            <option value="100" selected>100</option>
+            <option value="250">250</option>
+            <option value="500">500</option>
+          </select>
+        </label>
+      </div>
+    </div>
+    <div class="results-bar">
+      <div id="resultSummary" class="result-summary"></div>
+      <div class="pager">
+        <button id="firstPage" class="pager-button" type="button">First</button>
+        <button id="prevPage" class="pager-button" type="button">Previous</button>
+        <span id="pageStatus" class="page-status"></span>
+        <button id="nextPage" class="pager-button" type="button">Next</button>
+        <button id="lastPage" class="pager-button" type="button">Last</button>
+      </div>
     </div>
     <div class="table-shell">
       <table id="reportTable">
         <thead><tr>{header_cells}</tr></thead>
-        <tbody>{table_rows}</tbody>
+        <tbody></tbody>
       </table>
     </div>
     <p id="emptyState" class="empty-state" hidden>No rows match the current filter.</p>
   </div>
+  <script id="reportColumns" type="application/json">{column_data}</script>
+  <script id="reportRows" type="application/json">{row_data}</script>
   <script>
+    const columns = JSON.parse(document.getElementById("reportColumns").textContent);
+    const sourceRows = JSON.parse(document.getElementById("reportRows").textContent);
     const table = document.getElementById("reportTable");
     const tbody = table.querySelector("tbody");
     const headers = Array.from(table.querySelectorAll("th.sortable"));
     const filterInput = document.getElementById("rowFilter");
+    const pageSizeSelect = document.getElementById("pageSize");
+    const resultSummary = document.getElementById("resultSummary");
+    const pageStatus = document.getElementById("pageStatus");
+    const firstPageButton = document.getElementById("firstPage");
+    const prevPageButton = document.getElementById("prevPage");
+    const nextPageButton = document.getElementById("nextPage");
+    const lastPageButton = document.getElementById("lastPage");
     const emptyState = document.getElementById("emptyState");
+    const columnTypes = Object.fromEntries(columns.map(column => [column.key, column.type]));
+    const allRows = sourceRows.map((row, index) => ({{
+      ...row,
+      __index: index,
+      __search: columns.map(column => String(row[column.key] ?? "")).join(" ").toLowerCase(),
+    }}));
+    const state = {{
+      query: "",
+      page: 1,
+      pageSize: Number(pageSizeSelect.value) || 100,
+      sortKey: "",
+      sortDirection: "asc",
+    }};
+    let filteredRows = allRows.slice();
+    let filterTimer = null;
+
+    function escapeHtml(value) {{
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }}
     function normalizeValue(value, type) {{
       if (type === "number") {{
         const parsed = Number(value);
         return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
       }}
-      return String(value).toLowerCase();
+      return String(value ?? "").toLowerCase();
     }}
-    function updateEmptyState() {{
-      const visibleRows = Array.from(tbody.querySelectorAll("tr")).filter(row => !row.hidden);
-      emptyState.hidden = visibleRows.length !== 0;
+    function totalPages() {{
+      return Math.max(1, Math.ceil(filteredRows.length / state.pageSize));
     }}
-    function sortBy(header) {{
-      const key = header.dataset.key;
-      const type = header.dataset.type;
-      const current = header.dataset.direction === "asc" ? "desc" : "asc";
-      headers.forEach(item => delete item.dataset.direction);
-      header.dataset.direction = current;
-      const rows = Array.from(tbody.querySelectorAll("tr"));
-      rows.sort((left, right) => {{
-        const leftCell = left.querySelector(`[data-key="${{key}}"]`);
-        const rightCell = right.querySelector(`[data-key="${{key}}"]`);
-        const leftValue = normalizeValue(leftCell ? leftCell.dataset.value : "", type);
-        const rightValue = normalizeValue(rightCell ? rightCell.dataset.value : "", type);
-        if (leftValue < rightValue) return current === "asc" ? -1 : 1;
-        if (leftValue > rightValue) return current === "asc" ? 1 : -1;
-        return 0;
-      }});
-      for (const row of rows) tbody.appendChild(row);
-    }}
-    function applyFilter() {{
-      const query = filterInput.value.trim().toLowerCase();
-      for (const row of tbody.querySelectorAll("tr")) {{
-        row.hidden = query && !row.innerText.toLowerCase().includes(query);
+    function applyFilterAndSort() {{
+      const query = state.query;
+      filteredRows = query ? allRows.filter(row => row.__search.includes(query)) : allRows.slice();
+      if (!state.sortKey) {{
+        return;
       }}
-      updateEmptyState();
+      const type = columnTypes[state.sortKey] || "text";
+      const direction = state.sortDirection === "asc" ? 1 : -1;
+      filteredRows.sort((left, right) => {{
+        const leftValue = normalizeValue(left[state.sortKey], type);
+        const rightValue = normalizeValue(right[state.sortKey], type);
+        if (leftValue < rightValue) return -1 * direction;
+        if (leftValue > rightValue) return 1 * direction;
+        return left.__index - right.__index;
+      }});
     }}
-    headers.forEach(header => header.addEventListener("click", () => sortBy(header)));
-    filterInput.addEventListener("input", applyFilter);
-    updateEmptyState();
+    function renderPage() {{
+      const totalRows = filteredRows.length;
+      const pages = totalPages();
+      state.page = Math.min(Math.max(state.page, 1), pages);
+      if (!totalRows) {{
+        tbody.innerHTML = "";
+        resultSummary.textContent = `Showing 0 of 0 filtered rows (${{allRows.length}} total)`;
+        pageStatus.textContent = "Page 0 of 0";
+        firstPageButton.disabled = true;
+        prevPageButton.disabled = true;
+        nextPageButton.disabled = true;
+        lastPageButton.disabled = true;
+        emptyState.hidden = false;
+        return;
+      }}
+      const start = (state.page - 1) * state.pageSize;
+      const pageRows = filteredRows.slice(start, start + state.pageSize);
+      tbody.innerHTML = pageRows.map(row => {{
+        const statusClass = `status-${{String(row.status || "").toLowerCase()}}`;
+        const cells = columns.map(column => `<td data-key="${{escapeHtml(column.key)}}">${{escapeHtml(row[column.key])}}</td>`).join("");
+        return `<tr class="report-row ${{statusClass}}">${{cells}}</tr>`;
+      }}).join("");
+      const end = start + pageRows.length;
+      resultSummary.textContent = `Showing ${{start + 1}}-${{end}} of ${{totalRows}} filtered rows (${{allRows.length}} total)`;
+      pageStatus.textContent = `Page ${{state.page}} of ${{pages}}`;
+      firstPageButton.disabled = state.page <= 1;
+      prevPageButton.disabled = state.page <= 1;
+      nextPageButton.disabled = state.page >= pages;
+      lastPageButton.disabled = state.page >= pages;
+      emptyState.hidden = true;
+    }}
+    function refreshView(resetPage) {{
+      if (resetPage) {{
+        state.page = 1;
+      }}
+      applyFilterAndSort();
+      renderPage();
+    }}
+    headers.forEach(header => header.addEventListener("click", () => {{
+      const key = header.dataset.key;
+      if (state.sortKey === key) {{
+        state.sortDirection = state.sortDirection === "asc" ? "desc" : "asc";
+      }} else {{
+        state.sortKey = key;
+        state.sortDirection = header.dataset.type === "number" ? "desc" : "asc";
+      }}
+      headers.forEach(item => delete item.dataset.direction);
+      header.dataset.direction = state.sortDirection;
+      refreshView(false);
+    }}));
+    filterInput.addEventListener("input", () => {{
+      window.clearTimeout(filterTimer);
+      filterTimer = window.setTimeout(() => {{
+        state.query = filterInput.value.trim().toLowerCase();
+        refreshView(true);
+      }}, 120);
+    }});
+    pageSizeSelect.addEventListener("change", () => {{
+      state.pageSize = Number(pageSizeSelect.value) || 100;
+      refreshView(true);
+    }});
+    firstPageButton.addEventListener("click", () => {{
+      state.page = 1;
+      renderPage();
+    }});
+    prevPageButton.addEventListener("click", () => {{
+      state.page -= 1;
+      renderPage();
+    }});
+    nextPageButton.addEventListener("click", () => {{
+      state.page += 1;
+      renderPage();
+    }});
+    lastPageButton.addEventListener("click", () => {{
+      state.page = totalPages();
+      renderPage();
+    }});
+    refreshView(true);
   </script>
 </body>
 </html>
@@ -1151,7 +1606,8 @@ def write_html_report(
         excluded_workspaces=html.escape(summary["excluded_workspaces"]),
         generated_at=html.escape(summary["generated_at"]),
         header_cells="".join(header_cells),
-        table_rows=render_html_table_rows(rows),
+        column_data=column_data,
+        row_data=row_data,
     )
 
     with open(path, "w", encoding="utf-8") as handle:
@@ -1198,6 +1654,18 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Optional comma-separated list of workspaces to exclude from report rows and orphan detection.",
     )
     parser.add_argument(
+        "--catalog-source",
+        choices=("auto", "filesystem", "rest"),
+        default="auto",
+        help="Catalog discovery source. 'auto' prefers local data_dir/workspaces and falls back to REST.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=worker_default(),
+        help="Worker thread count for per-store filesystem processing.",
+    )
+    parser.add_argument(
         "--timeout",
         type=int,
         default=60,
@@ -1219,12 +1687,20 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     configure_logging(args.log_level)
-    validate_args(args)
 
     data_dir = os.path.abspath(args.data_dir)
     data_root = os.path.join(data_dir, "data")
     if not os.path.isdir(data_root):
         raise SystemExit("GeoServer data path does not exist: {}".format(data_root))
+
+    requested_catalog_source = (args.catalog_source or "auto").lower()
+    if requested_catalog_source == "auto":
+        catalog_source = (
+            "filesystem" if os.path.isdir(os.path.join(data_dir, "workspaces")) else "rest"
+        )
+    else:
+        catalog_source = requested_catalog_source
+    validate_args(args, catalog_source)
 
     excluded_workspaces = sorted(parse_excluded_workspaces(args.exclude_workspaces))
     output_html = derive_output_html_path(args.output_csv, args.output_html)
@@ -1234,23 +1710,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     LOGGER.info("Data directory: %s", data_dir)
     LOGGER.info("CSV output: %s", os.path.abspath(args.output_csv))
     LOGGER.info("HTML output: %s", output_html)
+    LOGGER.info("Catalog source: %s", catalog_source)
+    LOGGER.info("Worker threads: %s", args.workers)
     LOGGER.info(
         "Excluded workspaces: %s",
         ", ".join(excluded_workspaces) if excluded_workspaces else "None",
     )
 
-    client = GeoServerClient(
-        base_url=args.geoserver_url,
-        username=args.username,
-        password=args.password,
-        timeout=args.timeout,
-        insecure=args.insecure,
-    )
+    client: Optional[GeoServerClient] = None
+    if catalog_source == "rest" or (requested_catalog_source == "auto" and args.geoserver_url):
+        client = GeoServerClient(
+            base_url=args.geoserver_url,
+            username=args.username,
+            password=args.password,
+            timeout=args.timeout,
+            insecure=args.insecure,
+        )
 
     store_rows, referenced_roots, referenced_files = inventory_stores(
         client,
         data_dir,
         set(excluded_workspaces),
+        catalog_source=catalog_source,
+        workers=args.workers,
     )
     LOGGER.info("Collected %d store row(s)", len(store_rows))
 

@@ -7,6 +7,47 @@ import geoserver_store_report as report
 
 
 class GeoServerStoreReportTests(unittest.TestCase):
+    def test_filesystem_catalog_inventory_uses_local_workspaces(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = os.path.join(temp_dir, "data")
+            workspaces_root = os.path.join(temp_dir, "workspaces")
+            raster_dir = os.path.join(data_root, "fast_ws", "raster")
+            store_dir = os.path.join(workspaces_root, "fast_ws", "fast_store")
+            coverage_dir = os.path.join(store_dir, "fast_store")
+            os.makedirs(raster_dir, exist_ok=True)
+            os.makedirs(coverage_dir, exist_ok=True)
+
+            tif_path = os.path.join(raster_dir, "fast_store.tif")
+            with open(tif_path, "wb") as handle:
+                handle.write(b"mock")
+
+            with open(os.path.join(workspaces_root, "fast_ws", "workspace.xml"), "w", encoding="utf-8") as handle:
+                handle.write("<workspace><name>fast_ws</name></workspace>")
+            with open(os.path.join(store_dir, "coveragestore.xml"), "w", encoding="utf-8") as handle:
+                handle.write(
+                    "<coverageStore><name>fast_store</name><type>GeoTIFF</type>"
+                    "<url>file:data/fast_ws/raster/fast_store.tif</url></coverageStore>"
+                )
+            with open(os.path.join(coverage_dir, "coverage.xml"), "w", encoding="utf-8") as handle:
+                handle.write("<coverage><name>fast_layer</name></coverage>")
+
+            with patch.object(report, "list_workspaces", side_effect=AssertionError("REST should not be used")):
+                rows, referenced_roots, referenced_files = report.inventory_stores(
+                    client=None,
+                    data_dir=temp_dir,
+                    excluded_workspaces=set(),
+                    catalog_source="filesystem",
+                    workers=2,
+                )
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["workspace"], "fast_ws")
+            self.assertEqual(rows[0]["store_name"], "fast_store")
+            self.assertEqual(rows[0]["layer_names"], "fast_layer")
+            self.assertEqual(rows[0]["status"], "ok")
+            self.assertFalse(referenced_roots)
+            self.assertIn(report.normalize_path(tif_path), referenced_files)
+
     def test_size_gb_is_rounded_to_two_decimals(self):
         row = report.build_row(
             row_kind="store",
@@ -165,6 +206,9 @@ class GeoServerStoreReportTests(unittest.TestCase):
         self.assertIn("GeoServer Store Report", html_text)
         self.assertIn('id="reportTable"', html_text)
         self.assertIn('class="sortable"', html_text)
+        self.assertIn('id="pageSize"', html_text)
+        self.assertIn('id="reportRows"', html_text)
+        self.assertIn("<tbody></tbody>", html_text)
         self.assertIn("skip_me", html_text)
 
 
