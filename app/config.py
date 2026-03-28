@@ -35,7 +35,7 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         data_dir = os.path.abspath(
-            os.getenv("GEOSERVER_DATA_DIR", os.path.join(os.getcwd(), "docker", "geoserver_data"))
+            os.getenv("GEOSERVER_DATA_DIR", os.path.join(os.getcwd(), "geoserver_test", "geoserver_data"))
         )
         default_root = os.path.join(data_dir, "data")
         return cls(

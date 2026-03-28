@@ -23,27 +23,40 @@ class JobManager:
         if running:
             raise RuntimeError("Another job is already queued or running.")
 
-    def start_scan(self) -> int:
+    def start_scan(self, excluded_workspaces_raw: str = "") -> int:
         with self._lock:
             self.ensure_idle()
-            job_id = db.create_job(self.db_path, "scan", "Inventory scan queued")
-            thread = threading.Thread(target=self._run_scan, args=(job_id,), daemon=True)
+            metadata = {"excluded_workspaces": excluded_workspaces_raw}
+            job_id = db.create_job(self.db_path, "scan", "Inventory scan queued", metadata=metadata)
+            thread = threading.Thread(target=self._run_scan, args=(job_id, excluded_workspaces_raw), daemon=True)
             thread.start()
             return job_id
 
-    def start_delete(self, run_id: int, store_ids: Sequence[int]) -> int:
+    def start_delete(self, run_id: int, store_ids: Sequence[int], excluded_workspaces_raw: str = "") -> int:
         with self._lock:
             self.ensure_idle()
-            metadata = {"run_id": run_id, "store_ids": list(store_ids)}
+            metadata = {
+                "run_id": run_id,
+                "store_ids": list(store_ids),
+                "excluded_workspaces": excluded_workspaces_raw,
+            }
             job_id = db.create_job(self.db_path, "delete", "Delete job queued", metadata=metadata)
-            thread = threading.Thread(target=self._run_delete, args=(job_id, run_id, list(store_ids)), daemon=True)
+            thread = threading.Thread(
+                target=self._run_delete,
+                args=(job_id, run_id, list(store_ids), excluded_workspaces_raw),
+                daemon=True,
+            )
             thread.start()
             return job_id
 
-    def _run_scan(self, job_id: int) -> None:
+    def _run_scan(self, job_id: int, excluded_workspaces_raw: str) -> None:
         try:
             db.update_job(self.db_path, job_id, status="running", message="Inventory scan running", started=True)
-            run_id = inventory.run_inventory_scan(self.settings, self.db_path)
+            run_id = inventory.run_inventory_scan(
+                self.settings,
+                self.db_path,
+                excluded_workspaces_raw=excluded_workspaces_raw,
+            )
             db.update_job(
                 self.db_path,
                 job_id,
@@ -63,7 +76,13 @@ class JobManager:
                 finished=True,
             )
 
-    def _run_delete(self, job_id: int, run_id: int, store_ids: Sequence[int]) -> None:
+    def _run_delete(
+        self,
+        job_id: int,
+        run_id: int,
+        store_ids: Sequence[int],
+        excluded_workspaces_raw: str,
+    ) -> None:
         try:
             db.update_job(self.db_path, job_id, status="running", message="Delete job running", started=True)
             result = deletion.execute_delete_job(self.db_path, self.settings, run_id, store_ids)
@@ -74,7 +93,11 @@ class JobManager:
                 message="Delete completed. Refreshing inventory snapshot",
                 metadata=result,
             )
-            refreshed_run_id = inventory.run_inventory_scan(self.settings, self.db_path)
+            refreshed_run_id = inventory.run_inventory_scan(
+                self.settings,
+                self.db_path,
+                excluded_workspaces_raw=excluded_workspaces_raw,
+            )
             metadata = dict(result)
             metadata["refreshed_run_id"] = refreshed_run_id
             db.update_job(

@@ -147,3 +147,18 @@ class CleanupAppTests(unittest.TestCase):
                     )
                 self.assertEqual(response.status_code, 303)
                 self.assertEqual(response.headers["location"], "/jobs/77")
+
+    def test_scan_route_passes_excluded_workspaces_to_job_manager(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            os.makedirs(os.path.join(temp_dir, "data"), exist_ok=True)
+            module = self.load_app(temp_dir)
+            with TestClient(module.app) as client:
+                with patch.object(module.app.state.job_manager, "start_scan", return_value=41) as mock_start_scan:
+                    response = client.post(
+                        "/scan",
+                        data={"exclude_workspaces": "cultural,politics"},
+                        follow_redirects=False,
+                    )
+                self.assertEqual(response.status_code, 303)
+                self.assertEqual(response.headers["location"], "/jobs/41")
+                mock_start_scan.assert_called_once_with("cultural,politics")

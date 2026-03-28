@@ -47,6 +47,21 @@ a { color: inherit; }
 h1, h2 { margin: 0; }
 .lede { margin: 0.7rem 0 0; max-width: 56rem; color: var(--muted); line-height: 1.55; }
 .action-row { display: flex; gap: 0.8rem; flex-wrap: wrap; }
+.scan-form {
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.scan-form input[type="text"] {
+  min-width: 18rem;
+  min-height: 2.75rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.7rem 0.9rem;
+  background: rgba(255, 255, 255, 0.92);
+  font: inherit;
+}
 .primary-button, .ghost-button, .danger-button {
   display: inline-flex;
   align-items: center;

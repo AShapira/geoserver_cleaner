@@ -147,6 +147,11 @@ def home() -> RedirectResponse:
 def stores_page(request: Request):
     latest_run = db.get_latest_completed_run(SETTINGS.database_path)
     summary = db.latest_summary(SETTINGS.database_path)
+    current_excluded_workspaces = ""
+    if summary and summary.get("excluded_workspaces"):
+        current_excluded_workspaces = str(summary["excluded_workspaces"])
+    else:
+        current_excluded_workspaces = SETTINGS.excluded_workspaces_raw
     context = {
         "request": request,
         "app_title": SETTINGS.app_title,
@@ -154,6 +159,7 @@ def stores_page(request: Request):
         "latest_run": latest_run,
         "running_jobs": db.list_running_jobs(SETTINGS.database_path),
         "physical_delete_enabled": SETTINGS.allow_physical_delete,
+        "current_excluded_workspaces": current_excluded_workspaces,
     }
     if latest_run is not None:
         context["table_state"] = build_table_state(request, int(latest_run["id"]))
@@ -175,9 +181,9 @@ def stores_table(request: Request):
 
 
 @app.post("/scan")
-def start_scan() -> RedirectResponse:
+def start_scan(exclude_workspaces: str = Form("")) -> RedirectResponse:
     try:
-        job_id = app.state.job_manager.start_scan()
+        job_id = app.state.job_manager.start_scan(exclude_workspaces.strip())
     except Exception as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return RedirectResponse(url="/jobs/{}".format(job_id), status_code=303)
@@ -239,8 +245,10 @@ def delete_execute(
     store_ids = deletion.parse_selected_ids(selected_ids)
     if not store_ids:
         raise HTTPException(status_code=400, detail="No stores were selected.")
+    run = db.get_run(SETTINGS.database_path, run_id)
+    excluded_workspaces_raw = str(run["excluded_workspaces"]) if run is not None else SETTINGS.excluded_workspaces_raw
     try:
-        job_id = app.state.job_manager.start_delete(run_id, store_ids)
+        job_id = app.state.job_manager.start_delete(run_id, store_ids, excluded_workspaces_raw)
     except Exception as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return RedirectResponse(url="/jobs/{}".format(job_id), status_code=303)

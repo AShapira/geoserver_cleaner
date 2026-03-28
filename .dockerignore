@@ -1,0 +1,12 @@
+.git
+.github
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+app_data/
+reports/
+tests/
+geoserver_test/
+TASK_EXECUTION_REPORT.md

@@ -11,9 +11,10 @@ services:
       GEOSERVER_PASSWORD: geoserver
       GEOSERVER_DATA_DIR: /geoserver_data
       GEOSERVER_CATALOG_SOURCE: filesystem
+      GEOSERVER_EXCLUDE_WORKSPACES: ""
       APP_DATABASE_PATH: /app_data/cleanup_app.sqlite3
       ALLOW_PHYSICAL_DELETE: "false"
       ALLOWED_DATA_ROOTS: /geoserver_data/data
     volumes:
-      - ./docker/geoserver_data:/geoserver_data
+      - ./geoserver_test/geoserver_data:/geoserver_data
       - ./app_data:/app_data

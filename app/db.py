@@ -286,6 +286,11 @@ def get_latest_completed_run(db_path: str) -> Optional[sqlite3.Row]:
         ).fetchone()
 
 
+def get_run(db_path: str, run_id: int) -> Optional[sqlite3.Row]:
+    with managed_connection(db_path) as connection:
+        return connection.execute("SELECT * FROM inventory_runs WHERE id = ?", (run_id,)).fetchone()
+
+
 def query_stores(
     db_path: str,
     run_id: int,

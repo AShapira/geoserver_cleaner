@@ -11,6 +11,8 @@ The repository now also includes a web application that builds on the same inven
 - `HTMX` for partial page refresh and job polling
 - `SQLite` snapshot cache and job tracking
 
+GeoServer fixture assets for local testing are organized under [geoserver_test](c:\Alex\work\geoserver_cleaner\geoserver_test).
+
 It is intended for cases where a GeoServer installation has accumulated a large amount of data on disk and the user needs to understand:
 
 - which stores consume the most space
@@ -306,6 +308,7 @@ Important note:
 
 - physical delete is disabled by default
 - when enabled, the application deletes only under `ALLOWED_DATA_ROOTS`
+- the scan form in the web UI also accepts a comma-separated exclude list and persists that choice into the generated snapshot
 
 ### Run The Web App
 
@@ -340,6 +343,10 @@ The compose example is in [docker-compose.cleanup-app.yml](c:\Alex\work\geoserve
 - GeoServer data directory at `/geoserver_data`
 - application database at `/app_data`
 
+By default the example mounts the local fixture directory:
+
+- [geoserver_test/geoserver_data](c:\Alex\work\geoserver_cleaner\geoserver_test\geoserver_data)
+
 ### Current Scope
 
 The web app is an MVP implementation of the design review in [FASTAPI_APP_DESIGN_REVIEW.md](c:\Alex\work\geoserver_cleaner\FASTAPI_APP_DESIGN_REVIEW.md).
@@ -360,7 +367,17 @@ Not implemented yet:
 - richer audit browsing UI
 - batch progress itemization per store in the job page
 
-If workspaces are excluded with `--exclude-workspaces`, stores from those workspaces are omitted from report rows and their data is not treated as orphaned.
+If workspaces are excluded with `--exclude-workspaces`, or with the web app scan exclude field, stores from those workspaces are omitted from report rows and their data is not treated as orphaned.
+
+## GeoServer Test Fixture
+
+The local Docker GeoServer fixture and its population scripts now live in [geoserver_test](c:\Alex\work\geoserver_cleaner\geoserver_test):
+
+- [geoserver_test/docker-compose.geoserver-test.yml](c:\Alex\work\geoserver_cleaner\geoserver_test\docker-compose.geoserver-test.yml)
+- [geoserver_test/populate_geoserver_natural_earth.py](c:\Alex\work\geoserver_cleaner\geoserver_test\populate_geoserver_natural_earth.py)
+- [geoserver_test/populate_geoserver_bulk_mock.py](c:\Alex\work\geoserver_cleaner\geoserver_test\populate_geoserver_bulk_mock.py)
+
+The cleanup-app Docker image ignores that directory through [.dockerignore](c:\Alex\work\geoserver_cleaner\.dockerignore), so fixture data and downloads are not copied into the application image build context.
 
 It reports:
 

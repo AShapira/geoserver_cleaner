@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 from typing import List, Optional, Set
 
 import geoserver_store_report as report
@@ -125,17 +126,24 @@ def collect_inventory_rows(settings: Settings) -> List[dict]:
     return rows
 
 
-def run_inventory_scan(settings: Settings, db_path: str) -> int:
-    catalog_source = effective_catalog_source(settings)
+def settings_with_excluded_workspaces(settings: Settings, excluded_workspaces_raw: Optional[str]) -> Settings:
+    if excluded_workspaces_raw is None:
+        return settings
+    return replace(settings, excluded_workspaces_raw=excluded_workspaces_raw)
+
+
+def run_inventory_scan(settings: Settings, db_path: str, excluded_workspaces_raw: Optional[str] = None) -> int:
+    effective_settings = settings_with_excluded_workspaces(settings, excluded_workspaces_raw)
+    catalog_source = effective_catalog_source(effective_settings)
     run_id = db.create_inventory_run(
         db_path,
         catalog_source=catalog_source,
-        excluded_workspaces=settings.excluded_workspaces,
-        geoserver_url=settings.geoserver_url,
-        data_dir=os.path.abspath(settings.data_dir),
+        excluded_workspaces=effective_settings.excluded_workspaces,
+        geoserver_url=effective_settings.geoserver_url,
+        data_dir=os.path.abspath(effective_settings.data_dir),
     )
     try:
-        rows = collect_inventory_rows(settings)
+        rows = collect_inventory_rows(effective_settings)
         store_rows = [row for row in rows if row.get("row_kind") == "store"]
         orphan_rows = [row for row in rows if row.get("row_kind") == "orphaned"]
         issue_rows = [row for row in store_rows if row.get("status") != "ok"]

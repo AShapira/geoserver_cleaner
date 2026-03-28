@@ -1,4 +1,4 @@
-# GeoServer Docker Deployment And Script Test Report
+﻿# GeoServer Docker Deployment And Script Test Report
 
 ## Task Summary
 
@@ -48,16 +48,16 @@ Natural Earth source data used:
 
 ## Files Created Or Updated
 
-- [docker-compose.geoserver-test.yml](c:\Alex\work\geoserver_cleaner\docker-compose.geoserver-test.yml)
-- [populate_geoserver_natural_earth.py](c:\Alex\work\geoserver_cleaner\populate_geoserver_natural_earth.py)
+- [docker-compose.geoserver-test.yml](c:\Alex\work\geoserver_cleaner\geoserver_test\docker-compose.geoserver-test.yml)
+- [populate_geoserver_natural_earth.py](c:\Alex\work\geoserver_cleaner\geoserver_test\populate_geoserver_natural_earth.py)
 - [geoserver_store_report.py](c:\Alex\work\geoserver_cleaner\geoserver_store_report.py)
 - [reports\geoserver_store_report_test.csv](c:\Alex\work\geoserver_cleaner\reports\geoserver_store_report_test.csv)
 - [TASK_EXECUTION_REPORT.md](c:\Alex\work\geoserver_cleaner\TASK_EXECUTION_REPORT.md)
 
 Runtime directories created:
 
-- `docker\geoserver_data`
-- `docker\downloads`
+- `geoserver_test\geoserver_data`
+- `geoserver_test\downloads`
 
 ## Deployment Implementation
 
@@ -68,12 +68,12 @@ An isolated GeoServer test deployment was created with:
 - image: `docker.osgeo.org/geoserver:2.28.0`
 - host port: `8081`
 - container port: `8080`
-- mounted data directory: `./docker/geoserver_data -> /opt/geoserver_data`
+- mounted data directory: `./geoserver_test/geoserver_data -> /opt/geoserver_data`
 - demo data disabled with `SKIP_DEMO_DATA=true`
 
 The deployment is defined in:
 
-- [docker-compose.geoserver-test.yml](c:\Alex\work\geoserver_cleaner\docker-compose.geoserver-test.yml)
+- [docker-compose.geoserver-test.yml](c:\Alex\work\geoserver_cleaner\geoserver_test\docker-compose.geoserver-test.yml)
 
 Container status after deployment:
 
@@ -95,10 +95,10 @@ The helper script:
 - downloaded the Natural Earth countries shapefile zip
 - downloaded the Natural Earth Gray Earth raster zip
 - extracted the files into the mounted GeoServer data directory under:
-  - `docker\geoserver_data\data\naturalearth\vector`
-  - `docker\geoserver_data\data\naturalearth\raster`
+  - `geoserver_test\geoserver_data\data\naturalearth\vector`
+  - `geoserver_test\geoserver_data\data\naturalearth\raster`
 - created a test orphan directory:
-  - `docker\geoserver_data\data\orphaned_demo`
+  - `geoserver_test\geoserver_data\data\orphaned_demo`
 - created a GeoServer workspace:
   - `naturalearth`
 - published:
@@ -119,13 +119,13 @@ Published catalog contents verified through REST:
 Deployment:
 
 ```powershell
-docker compose -f docker-compose.geoserver-test.yml up -d
+docker compose -f geoserver_test/docker-compose.geoserver-test.yml up -d
 ```
 
 Population:
 
 ```powershell
-python populate_geoserver_natural_earth.py --base-dir .
+python geoserver_test/populate_geoserver_natural_earth.py --base-dir .
 ```
 
 Report test:
@@ -135,7 +135,7 @@ python geoserver_store_report.py `
   --geoserver-url http://localhost:8081/geoserver `
   --username admin `
   --password geoserver `
-  --data-dir .\docker\geoserver_data `
+  --data-dir .\geoserver_test\geoserver_data `
   --output-csv .\reports\geoserver_store_report_test.csv
 ```
 
@@ -221,7 +221,7 @@ Store 2:
 
 The report correctly detected the intentionally created orphan directory:
 
-- path: `docker\geoserver_data\data\orphaned_demo`
+- path: `geoserver_test\geoserver_data\data\orphaned_demo`
 - path kind: `directory`
 - file count: `1`
 - status: `orphaned`
@@ -245,13 +245,13 @@ Completed:
 Start or recreate the deployment:
 
 ```powershell
-docker compose -f docker-compose.geoserver-test.yml up -d
+docker compose -f geoserver_test/docker-compose.geoserver-test.yml up -d
 ```
 
 Populate GeoServer:
 
 ```powershell
-python populate_geoserver_natural_earth.py --base-dir .
+python geoserver_test/populate_geoserver_natural_earth.py --base-dir .
 ```
 
 Run the report:
@@ -261,7 +261,7 @@ python geoserver_store_report.py `
   --geoserver-url http://localhost:8081/geoserver `
   --username admin `
   --password geoserver `
-  --data-dir .\docker\geoserver_data `
+  --data-dir .\geoserver_test\geoserver_data `
   --output-csv .\reports\geoserver_store_report_test.csv
 ```
 
@@ -350,7 +350,7 @@ The population helper was updated to:
 
 The updated helper script is:
 
-- [populate_geoserver_natural_earth.py](c:\Alex\work\geoserver_cleaner\populate_geoserver_natural_earth.py)
+- [populate_geoserver_natural_earth.py](c:\Alex\work\geoserver_cleaner\geoserver_test\populate_geoserver_natural_earth.py)
 
 ## Report Refactor And Feature Update
 
@@ -404,7 +404,7 @@ python geoserver_store_report.py `
   --geoserver-url http://localhost:8081/geoserver `
   --username admin `
   --password geoserver `
-  --data-dir .\docker\geoserver_data `
+  --data-dir .\geoserver_test\geoserver_data `
   --output-csv .\reports\geoserver_store_report_test_refactored.csv `
   --log-level INFO
 ```
@@ -427,7 +427,7 @@ python geoserver_store_report.py `
   --geoserver-url http://localhost:8081/geoserver `
   --username admin `
   --password geoserver `
-  --data-dir .\docker\geoserver_data `
+  --data-dir .\geoserver_test\geoserver_data `
   --output-csv .\reports\geoserver_store_report_excluded.csv `
   --exclude-workspaces naturalearth `
   --log-level INFO
@@ -444,3 +444,5 @@ This confirmed that:
 - the live catalog still reports correctly after the refactor
 - the HTML report is generated successfully
 - excluded workspace data is not marked as orphaned
+
+

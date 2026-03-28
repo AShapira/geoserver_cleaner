@@ -411,8 +411,8 @@ class GeoServerRest:
 
 
 def build_paths(base_dir: Path, workspaces: list[str]) -> dict:
-    data_dir = base_dir / "docker" / "geoserver_data"
-    downloads_dir = base_dir / "docker" / "downloads"
+    data_dir = base_dir / "geoserver_test" / "geoserver_data"
+    downloads_dir = base_dir / "geoserver_test" / "downloads"
     workspace_dirs = {}
     for workspace in workspaces:
         root = data_dir / "data" / workspace
@@ -516,7 +516,11 @@ def path_to_geoserver_relative(data_dir: Path, target: Path) -> str:
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Populate a local GeoServer test instance with Natural Earth and NASA data.")
-    parser.add_argument("--base-dir", default=os.getcwd(), help="Project base directory that contains docker-compose.geoserver-test.yml")
+    parser.add_argument(
+        "--base-dir",
+        default=os.getcwd(),
+        help="Project base directory that contains the geoserver_test fixture directory",
+    )
     parser.add_argument("--geoserver-url", default="http://localhost:8081/geoserver", help="GeoServer base URL")
     parser.add_argument("--username", default="admin", help="GeoServer admin username")
     parser.add_argument("--password", default="geoserver", help="GeoServer admin password")

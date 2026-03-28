@@ -8,7 +8,8 @@
       <p class="lede">Review the latest GeoServer snapshot, select stores, preview the deletion plan, and refresh the inventory after cleanup.</p>
     </div>
     <div class="action-row">
-      <form action="/scan" method="post">
+      <form action="/scan" method="post" class="scan-form">
+        <input type="text" name="exclude_workspaces" value="{{ current_excluded_workspaces }}" placeholder="workspace_a,workspace_b">
         <button class="primary-button" type="submit">Recalculate Inventory</button>
       </form>
       <a class="ghost-button" href="/stores">Reset View</a>
@@ -59,6 +60,10 @@
     <article class="meta-card">
       <strong>Physical Delete</strong>
       <span>{% if physical_delete_enabled %}Enabled{% else %}Disabled{% endif %}</span>
+    </article>
+    <article class="meta-card">
+      <strong>Excluded Workspaces</strong>
+      <span>{{ current_excluded_workspaces or 'None' }}</span>
     </article>
   </section>
 

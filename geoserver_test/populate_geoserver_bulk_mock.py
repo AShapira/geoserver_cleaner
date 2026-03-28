@@ -364,10 +364,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not qgis_python.exists():
         raise SystemExit(f"QGIS Python executable not found: {qgis_python}")
 
-    data_dir = base_dir / "docker" / "geoserver_data"
+    data_dir = base_dir / "geoserver_test" / "geoserver_data"
     data_root = data_dir / "data"
     workspaces_root = data_dir / "workspaces"
-    template_dir = base_dir / "docker" / "downloads" / "mock_templates"
+    template_dir = base_dir / "geoserver_test" / "downloads" / "mock_templates"
     base_tif = template_dir / "mock_template_4326.tif"
     ensure_directory(template_dir)
     create_base_geotiff(qgis_python, base_tif)
