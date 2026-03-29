@@ -49,13 +49,13 @@ class Settings:
             timeout=int(os.getenv("GEOSERVER_TIMEOUT", "60")),
             workers=int(os.getenv("GEOSERVER_WORKERS", str(report.worker_default()))),
             database_path=os.path.abspath(
-                os.getenv("APP_DATABASE_PATH", os.path.join(os.getcwd(), "app_data", "cleanup_app.sqlite3"))
+                os.getenv("APP_DATABASE_PATH", os.path.join(os.getcwd(), "app_data", "geoserver_cleaner.sqlite3"))
             ),
             allow_physical_delete=_bool_env("ALLOW_PHYSICAL_DELETE", False),
             allowed_data_roots_raw=os.getenv("ALLOWED_DATA_ROOTS", default_root),
             page_size_default=int(os.getenv("APP_PAGE_SIZE_DEFAULT", "100")),
             page_size_max=int(os.getenv("APP_PAGE_SIZE_MAX", "500")),
-            app_title=os.getenv("APP_TITLE", "GeoServer Cleanup Console"),
+            app_title=os.getenv("APP_TITLE", "GeoServer Cleaner"),
         )
 
     @property

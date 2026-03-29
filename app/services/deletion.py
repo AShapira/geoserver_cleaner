@@ -3,13 +3,15 @@ from __future__ import annotations
 import os
 import shutil
 from dataclasses import dataclass
-from typing import Dict, List, Sequence, Set
+from typing import Callable, Dict, List, Optional, Sequence, Set
 
 import geoserver_store_report as report
 
 from app import db
 from app.config import Settings
 from app.services import geoserver
+
+ProgressCallback = Callable[[dict, str], None]
 
 
 @dataclass
@@ -150,26 +152,54 @@ def execute_delete_job(
     settings: Settings,
     run_id: int,
     store_ids: Sequence[int],
+    progress_callback: Optional[ProgressCallback] = None,
 ) -> Dict[str, object]:
     preview = build_delete_preview(db_path, settings, run_id, store_ids)
     items: List[DeletePlanItem] = preview["items"]
     deleted_store_keys: List[str] = []
     failed_items: List[str] = []
     deleted_paths: Set[str] = set()
+    total_items = len(items)
 
-    for item in items:
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "delete",
+                "processed_delete_items": 0,
+                "total_delete_items": total_items,
+                "deleted_count": 0,
+                "failed_count": 0,
+                "remaining_delete_items": total_items,
+            },
+            "Deleted 0 stores, remaining {}".format(total_items),
+        )
+
+    for index, item in enumerate(items, start=1):
         if not item.can_delete_store:
             failed_items.append("{} / {}: {}".format(item.workspace, item.store_name, item.reason or "blocked"))
-            continue
-        try:
-            geoserver.delete_store(settings, item.workspace, item.store_kind, item.store_name)
-            deleted_store_keys.append("{}/{}".format(item.workspace, item.store_name))
-        except Exception as exc:
-            failed_items.append("{} / {}: {}".format(item.workspace, item.store_name, exc))
-            continue
-        if item.can_delete_files and item.resolved_path and item.normalized_path not in deleted_paths:
-            delete_store_paths([item.resolved_path], settings)
-            deleted_paths.add(item.normalized_path)
+        else:
+            try:
+                geoserver.delete_store(settings, item.workspace, item.store_kind, item.store_name)
+                deleted_store_keys.append("{}/{}".format(item.workspace, item.store_name))
+            except Exception as exc:
+                failed_items.append("{} / {}: {}".format(item.workspace, item.store_name, exc))
+            else:
+                if item.can_delete_files and item.resolved_path and item.normalized_path not in deleted_paths:
+                    delete_store_paths([item.resolved_path], settings)
+                    deleted_paths.add(item.normalized_path)
+        if progress_callback is not None:
+            remaining = max(total_items - index, 0)
+            progress_callback(
+                {
+                    "phase": "delete",
+                    "processed_delete_items": index,
+                    "total_delete_items": total_items,
+                    "deleted_count": len(deleted_store_keys),
+                    "failed_count": len(failed_items),
+                    "remaining_delete_items": remaining,
+                },
+                "Deleted {} stores, remaining {}".format(len(deleted_store_keys), remaining),
+            )
 
     db.add_audit_event(
         db_path,
@@ -184,6 +214,11 @@ def execute_delete_job(
     )
     return {
         "deleted_stores": deleted_store_keys,
+        "deleted_count": len(deleted_store_keys),
         "deleted_paths": sorted(deleted_paths),
         "failed_items": failed_items,
+        "failed_count": len(failed_items),
+        "processed_delete_items": total_items,
+        "total_delete_items": total_items,
+        "remaining_delete_items": 0,
     }

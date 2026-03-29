@@ -1,1 +1,1 @@
-"""Service layer package for the cleanup application."""
+"""Service layer package for the GeoServer Cleaner application."""

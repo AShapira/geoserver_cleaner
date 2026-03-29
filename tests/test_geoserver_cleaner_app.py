@@ -8,10 +8,10 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 
-class CleanupAppTests(unittest.TestCase):
+class GeoServerCleanerAppTests(unittest.TestCase):
     def load_app(self, temp_dir: str, allow_physical_delete: bool = False):
         env_updates = {
-            "APP_DATABASE_PATH": os.path.join(temp_dir, "app.sqlite3"),
+            "APP_DATABASE_PATH": os.path.join(temp_dir, "geoserver_cleaner.sqlite3"),
             "GEOSERVER_DATA_DIR": temp_dir,
             "GEOSERVER_URL": "http://example.test/geoserver",
             "GEOSERVER_USER": "admin",
@@ -78,9 +78,66 @@ class CleanupAppTests(unittest.TestCase):
             with TestClient(module.app) as client:
                 response = client.get("/stores")
                 self.assertEqual(response.status_code, 200)
-                self.assertIn("GeoServer Cleanup Console", response.text)
+                self.assertIn("GeoServer Cleaner", response.text)
                 self.assertIn("demo", response.text)
                 self.assertIn("Preview Delete", response.text)
+                self.assertIn(">Workspace<", response.text)
+                type_index = response.text.index("Type</a></th>")
+                size_index = response.text.index("Size (GB)</a></th>")
+                files_index = response.text.index("Files</a></th>")
+                status_index = response.text.index("Status</a></th>")
+                self.assertLess(type_index, size_index)
+                self.assertLess(size_index, files_index)
+                self.assertLess(files_index, status_index)
+
+    def test_stores_table_filters_by_workspace(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            os.makedirs(os.path.join(temp_dir, "data"), exist_ok=True)
+            module = self.load_app(temp_dir)
+            self.seed_run(
+                module,
+                [
+                    {
+                        "store_kind": "coveragestores",
+                        "row_kind": "store",
+                        "workspace": "raster",
+                        "store_name": "demo_raster",
+                        "store_type": "GeoTIFF",
+                        "layer_names": "demo_raster",
+                        "configured_path": "",
+                        "resolved_path": "",
+                        "normalized_path": "",
+                        "path_kind": "",
+                        "size_bytes": 100,
+                        "size_gb": "0.00",
+                        "file_count": 1,
+                        "status": "ok",
+                        "notes": "",
+                    },
+                    {
+                        "store_kind": "datastores",
+                        "row_kind": "store",
+                        "workspace": "cultural",
+                        "store_name": "demo_vector",
+                        "store_type": "GeoPackage",
+                        "layer_names": "demo_vector",
+                        "configured_path": "",
+                        "resolved_path": "",
+                        "normalized_path": "",
+                        "path_kind": "",
+                        "size_bytes": 100,
+                        "size_gb": "0.00",
+                        "file_count": 1,
+                        "status": "ok",
+                        "notes": "",
+                    },
+                ],
+            )
+            with TestClient(module.app) as client:
+                response = client.get("/stores/table?workspace=raster")
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("demo_raster", response.text)
+                self.assertNotIn("demo_vector", response.text)
 
     def test_delete_preview_blocks_shared_path_file_delete(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -162,3 +219,85 @@ class CleanupAppTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 303)
                 self.assertEqual(response.headers["location"], "/jobs/41")
                 mock_start_scan.assert_called_once_with("cultural,politics")
+
+    def test_job_status_fragment_shows_progress_and_eta(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            os.makedirs(os.path.join(temp_dir, "data"), exist_ok=True)
+            module = self.load_app(temp_dir)
+            job_id = module.db.create_job(
+                module.SETTINGS.database_path,
+                "scan",
+                "Scanning stores 50/200",
+                metadata={
+                    "phase": "stores",
+                    "processed_stores": 50,
+                    "total_stores": 200,
+                    "progress_percent": 25.0,
+                    "eta_seconds": 120,
+                },
+            )
+            module.db.update_job(
+                module.SETTINGS.database_path,
+                job_id,
+                status="running",
+                message="Scanning stores 50/200",
+            )
+            with TestClient(module.app) as client:
+                response = client.get(f"/jobs/{job_id}/status")
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("Progress: 50/200", response.text)
+                self.assertIn("Scanned 50 stores, remaining 150", response.text)
+                self.assertIn("Estimated remaining time: 2m 0s", response.text)
+
+    def test_scan_job_status_fragment_shows_discovery_counts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            os.makedirs(os.path.join(temp_dir, "data"), exist_ok=True)
+            module = self.load_app(temp_dir)
+            job_id = module.db.create_job(
+                module.SETTINGS.database_path,
+                "scan",
+                "Discovering stores in GeoServer catalog",
+                metadata={
+                    "phase": "discovering",
+                    "discovered_store_count": 73,
+                    "processed_stores": 0,
+                    "total_stores": None,
+                },
+            )
+            module.db.update_job(
+                module.SETTINGS.database_path,
+                job_id,
+                status="running",
+                message="Discovering stores in GeoServer catalog",
+            )
+            with TestClient(module.app) as client:
+                response = client.get(f"/jobs/{job_id}/status")
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("Discovered 73 stores so far", response.text)
+
+    def test_delete_job_status_fragment_shows_delete_counts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            os.makedirs(os.path.join(temp_dir, "data"), exist_ok=True)
+            module = self.load_app(temp_dir)
+            job_id = module.db.create_job(
+                module.SETTINGS.database_path,
+                "delete",
+                "Delete job running",
+                metadata={
+                    "phase": "delete",
+                    "deleted_count": 3,
+                    "remaining_delete_items": 5,
+                    "processed_delete_items": 3,
+                    "total_delete_items": 8,
+                },
+            )
+            module.db.update_job(
+                module.SETTINGS.database_path,
+                job_id,
+                status="running",
+                message="Delete job running",
+            )
+            with TestClient(module.app) as client:
+                response = client.get(f"/jobs/{job_id}/status")
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("Deleted 3 stores, remaining 5", response.text)

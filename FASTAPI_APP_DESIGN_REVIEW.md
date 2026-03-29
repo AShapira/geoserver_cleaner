@@ -2,7 +2,7 @@
 
 ## Scope
 
-This document reviews the target architecture for turning the current reporting script into an operational cleanup application with this flow:
+This document reviews the target architecture for turning the current reporting script into an operational GeoServer Cleaner application with this flow:
 
 1. present GeoServer contents
 2. allow multi-select of stores

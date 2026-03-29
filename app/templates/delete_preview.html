@@ -1,40 +1,64 @@
 {% extends "base.html" %}
 {% block body %}
 <div class="page-shell narrow-shell">
-  <section class="hero">
-    <div>
-      <p class="eyebrow">Delete Preview</p>
-      <h1>Review selected stores</h1>
-      <p class="lede">This step shows which GeoServer stores can be removed and whether their data paths can also be deleted safely.</p>
+  <section class="inventory-topbar">
+    <div class="inventory-topbar-main">
+      <div class="inventory-title-block">
+        <p class="eyebrow">Delete Preview</p>
+        <div class="inventory-title-row">
+          <h1>Review selected stores</h1>
+          <span class="snapshot-pill">{{ preview["items"]|length }} selected · {{ preview["file_delete_count"] }} paths</span>
+        </div>
+        <div class="inventory-meta-line">
+          <span>This step shows which GeoServer stores can be removed and whether their data paths can also be deleted safely.</span>
+        </div>
+      </div>
+      <div class="action-row">
+        <a class="ghost-button" href="/stores">Back to inventory</a>
+      </div>
     </div>
-    <div class="action-row">
-      <a class="ghost-button" href="/stores">Back to inventory</a>
+  </section>
+
+  <section class="inventory-controls-panel delete-preview-controls">
+    <div class="inventory-chip-row">
+      <span class="metric-chip">
+        <strong>{{ preview["items"]|length }}</strong>
+        <span>Selected Stores</span>
+      </span>
+      <span class="metric-chip">
+        <strong>{{ preview["blocked_count"] }}</strong>
+        <span>Blocked Stores</span>
+      </span>
+      <span class="metric-chip">
+        <strong>{{ preview["file_delete_count"] }}</strong>
+        <span>Delete Paths</span>
+      </span>
+      {% for warning in preview["warnings"] %}
+      <span class="warning-chip">{{ warning }}</span>
+      {% endfor %}
+    </div>
+    <div class="selection-toolbar preview-selection-toolbar">
+      <div class="selection-toolbar-copy">
+        <strong>Ready to execute</strong>
+        <span>Review the table and path list before continuing.</span>
+      </div>
+      <div class="selection-toolbar-actions">
+        <form action="/delete/execute" method="post">
+          <input type="hidden" name="selected_ids" value="{{ selected_ids }}">
+          <input type="hidden" name="run_id" value="{{ run_id }}">
+          <button class="danger-button" type="submit" {% if not preview["items"] %}disabled{% endif %}>Delete Selected Stores</button>
+        </form>
+        <a class="ghost-button" href="/stores">Cancel</a>
+      </div>
     </div>
   </section>
 
-  <section class="summary-grid">
-    <article class="summary-card">
-      <span class="label">Selected Stores</span>
-      <strong class="value">{{ preview["items"]|length }}</strong>
-    </article>
-    <article class="summary-card">
-      <span class="label">Blocked Stores</span>
-      <strong class="value">{{ preview["blocked_count"] }}</strong>
-    </article>
-    <article class="summary-card">
-      <span class="label">Delete Paths</span>
-      <strong class="value">{{ preview["file_delete_count"] }}</strong>
-    </article>
-  </section>
-
-  <section class="warning-list">
-    {% for warning in preview["warnings"] %}
-    <div class="warning-item">{{ warning }}</div>
-    {% endfor %}
-  </section>
-
-  <section class="table-panel">
-    <div class="table-wrap">
+  <section class="table-panel delete-preview-panel">
+    <div class="table-toolbar">
+      <strong>Selected stores</strong>
+      <div class="table-summary">Selected store review. Scroll inside the table for the full list.</div>
+    </div>
+    <div class="table-wrap preview-table-wrap">
       <table class="stores-table">
         <thead>
           <tr>
@@ -65,23 +89,14 @@
   </section>
 
   {% if preview["delete_paths"] %}
-  <section class="path-list">
+  <section class="path-list preview-path-list">
     <h2>Physical paths scheduled for deletion</h2>
-    <ul>
+    <ul class="scroll-list">
       {% for path in preview["delete_paths"] %}
       <li class="mono">{{ path }}</li>
       {% endfor %}
     </ul>
   </section>
   {% endif %}
-
-  <section class="action-row">
-    <form action="/delete/execute" method="post">
-      <input type="hidden" name="selected_ids" value="{{ selected_ids }}">
-      <input type="hidden" name="run_id" value="{{ run_id }}">
-      <button class="danger-button" type="submit" {% if not preview["items"] %}disabled{% endif %}>Delete Selected Stores</button>
-    </form>
-    <a class="ghost-button" href="/stores">Cancel</a>
-  </section>
 </div>
 {% endblock %}

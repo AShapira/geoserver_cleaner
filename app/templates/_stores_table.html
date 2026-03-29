@@ -21,11 +21,11 @@
           <th><a href="{{ table_state.sort_links.workspace }}" hx-get="{{ table_state.sort_links.workspace }}" hx-target="#storesTableShell" hx-push-url="true">Workspace</a></th>
           <th><a href="{{ table_state.sort_links.store_name }}" hx-get="{{ table_state.sort_links.store_name }}" hx-target="#storesTableShell" hx-push-url="true">Store</a></th>
           <th><a href="{{ table_state.sort_links.store_type }}" hx-get="{{ table_state.sort_links.store_type }}" hx-target="#storesTableShell" hx-push-url="true">Type</a></th>
-          <th>Layers</th>
-          <th>Resolved Path</th>
           <th><a href="{{ table_state.sort_links.size_bytes }}" hx-get="{{ table_state.sort_links.size_bytes }}" hx-target="#storesTableShell" hx-push-url="true">Size (GB)</a></th>
           <th><a href="{{ table_state.sort_links.file_count }}" hx-get="{{ table_state.sort_links.file_count }}" hx-target="#storesTableShell" hx-push-url="true">Files</a></th>
           <th><a href="{{ table_state.sort_links.status }}" hx-get="{{ table_state.sort_links.status }}" hx-target="#storesTableShell" hx-push-url="true">Status</a></th>
+          <th>Layers</th>
+          <th>Resolved Path</th>
           <th>Notes</th>
         </tr>
       </thead>
@@ -41,11 +41,11 @@
           <td>{{ row['workspace'] }}</td>
           <td>{{ row['store_name'] }}</td>
           <td>{{ row['store_type'] }}</td>
-          <td class="truncate">{{ row['layer_names'] }}</td>
-          <td class="truncate mono">{{ row['resolved_path'] }}</td>
           <td class="mono">{{ row['size_gb'] }}</td>
           <td class="mono">{{ row['file_count'] }}</td>
           <td><span class="status-pill">{{ row['status'] }}</span></td>
+          <td class="truncate">{{ row['layer_names'] }}</td>
+          <td class="truncate mono">{{ row['resolved_path'] }}</td>
           <td class="truncate">{{ row['notes'] }}</td>
         </tr>
         {% endfor %}

@@ -335,10 +335,10 @@ http://localhost:8000/stores
 Build and run with Docker Compose:
 
 ```powershell
-docker compose -f docker-compose.cleanup-app.yml up --build
+docker compose -f docker-compose.geoserver-cleaner.yml up --build
 ```
 
-The compose example is in [docker-compose.cleanup-app.yml](c:\Alex\work\geoserver_cleaner\docker-compose.cleanup-app.yml). It mounts:
+The compose example is in [docker-compose.geoserver-cleaner.yml](c:\Alex\work\geoserver_cleaner\docker-compose.geoserver-cleaner.yml). It mounts:
 
 - GeoServer data directory at `/geoserver_data`
 - application database at `/app_data`
@@ -377,7 +377,7 @@ The local Docker GeoServer fixture and its population scripts now live in [geose
 - [geoserver_test/populate_geoserver_natural_earth.py](c:\Alex\work\geoserver_cleaner\geoserver_test\populate_geoserver_natural_earth.py)
 - [geoserver_test/populate_geoserver_bulk_mock.py](c:\Alex\work\geoserver_cleaner\geoserver_test\populate_geoserver_bulk_mock.py)
 
-The cleanup-app Docker image ignores that directory through [.dockerignore](c:\Alex\work\geoserver_cleaner\.dockerignore), so fixture data and downloads are not copied into the application image build context.
+The GeoServer Cleaner Docker image ignores that directory through [.dockerignore](c:\Alex\work\geoserver_cleaner\.dockerignore), so fixture data and downloads are not copied into the application image build context.
 
 It reports:
 

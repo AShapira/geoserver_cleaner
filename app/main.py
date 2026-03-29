@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
+import time
 from typing import Dict
 from urllib.parse import urlencode
 
@@ -17,7 +19,7 @@ from app.jobs import JobManager
 from app.services import deletion
 
 
-LOGGER = logging.getLogger("cleanup_app")
+LOGGER = logging.getLogger("geoserver_cleaner")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
@@ -34,10 +36,77 @@ app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), na
 db.init_db(SETTINGS.database_path)
 app.state.settings = SETTINGS
 app.state.job_manager = JobManager(SETTINGS, SETTINGS.database_path)
+app.state.asset_version = str(int(time.time()))
 
 
 def query_string(params: Dict[str, object]) -> str:
     return urlencode({key: value for key, value in params.items() if value not in ("", None)})
+
+
+def format_duration(seconds) -> str:
+    if seconds is None:
+        return ""
+    total = max(int(seconds), 0)
+    if total < 60:
+        return "{}s".format(total)
+    minutes, remainder = divmod(total, 60)
+    if minutes < 60:
+        return "{}m {}s".format(minutes, remainder)
+    hours, minutes = divmod(minutes, 60)
+    return "{}h {}m".format(hours, minutes)
+
+
+def build_progress_summary(job_type: str, metadata: Dict[str, object], status: str) -> str:
+    if job_type == "scan":
+        phase = str(metadata.get("phase") or "")
+        discovered = metadata.get("discovered_store_count")
+        processed = metadata.get("processed_stores")
+        total = metadata.get("total_stores")
+        if phase == "discovering" and discovered is not None:
+            return "Discovered {} stores so far".format(discovered)
+        if phase == "stores" and processed is not None and total is not None:
+            remaining = max(int(total) - int(processed), 0)
+            return "Scanned {} stores, remaining {}".format(processed, remaining)
+        if phase == "orphans":
+            return "Finished scanning stores. Calculating orphaned data"
+        if status == "completed" and total is not None:
+            return "Scanned {} stores, remaining 0".format(total)
+    if job_type == "delete":
+        phase = str(metadata.get("phase") or "")
+        deleted_count = int(metadata.get("deleted_count") or 0)
+        remaining_delete_items = metadata.get("remaining_delete_items")
+        processed = metadata.get("processed_stores")
+        total = metadata.get("total_stores")
+        if phase == "delete" and remaining_delete_items is not None:
+            return "Deleted {} stores, remaining {}".format(deleted_count, remaining_delete_items)
+        if phase == "refresh_stores" and processed is not None and total is not None:
+            remaining = max(int(total) - int(processed), 0)
+            return "Deleted {} stores. Scanned {} stores, remaining {}".format(
+                deleted_count,
+                processed,
+                remaining,
+            )
+        if phase == "refresh_orphans":
+            return "Deleted {} stores. Calculating orphaned data".format(deleted_count)
+        if status == "completed":
+            return "Deleted {} stores, remaining 0".format(deleted_count)
+    return ""
+
+
+def serialize_job(job) -> Dict[str, object]:
+    payload = {key: job[key] for key in job.keys()}
+    try:
+        metadata = json.loads(payload.get("metadata_json") or "{}")
+    except json.JSONDecodeError:
+        metadata = {}
+    payload["metadata"] = metadata
+    payload["eta_display"] = format_duration(metadata.get("eta_seconds"))
+    payload["progress_summary"] = build_progress_summary(
+        str(payload.get("job_type") or ""),
+        metadata,
+        str(payload.get("status") or ""),
+    )
+    return payload
 
 
 def build_table_state(request: Request, run_id: int) -> Dict[str, object]:
@@ -157,7 +226,7 @@ def stores_page(request: Request):
         "app_title": SETTINGS.app_title,
         "summary": summary,
         "latest_run": latest_run,
-        "running_jobs": db.list_running_jobs(SETTINGS.database_path),
+        "running_jobs": [serialize_job(item) for item in db.list_running_jobs(SETTINGS.database_path)],
         "physical_delete_enabled": SETTINGS.allow_physical_delete,
         "current_excluded_workspaces": current_excluded_workspaces,
     }
@@ -197,7 +266,7 @@ def job_detail(request: Request, job_id: int):
     return TEMPLATES.TemplateResponse(
         request,
         "job_detail.html",
-        {"job": job},
+        {"job": serialize_job(job)},
     )
 
 
@@ -209,7 +278,7 @@ def job_status_fragment(request: Request, job_id: int):
     return TEMPLATES.TemplateResponse(
         request,
         "_job_status.html",
-        {"job": job},
+        {"job": serialize_job(job)},
     )
 
 

@@ -7,13 +7,32 @@
   hx-swap="outerHTML"
   {% endif %}
 >
+  <div class="job-summary">
+    <strong>{{ job['message'] }}</strong>
+    {% if job['progress_summary'] %}
+    <span>{{ job['progress_summary'] }}</span>
+    {% endif %}
+    {% if job['metadata'].get('phase') %}
+    <span>Phase: {{ job['metadata']['phase'] }}</span>
+    {% endif %}
+    {% if job['metadata'].get('processed_stores') is not none and job['metadata'].get('total_stores') %}
+    <span>
+      Progress: {{ job['metadata']['processed_stores'] }}/{{ job['metadata']['total_stores'] }}
+      ({{ job['metadata']['progress_percent'] or 0 }}%)
+    </span>
+    {% endif %}
+    {% if job['eta_display'] %}
+    <span>Estimated remaining time: {{ job['eta_display'] }}</span>
+    {% endif %}
+  </div>
   <dl class="job-grid">
     <div><dt>Status</dt><dd>{{ job['status'] }}</dd></div>
     <div><dt>Type</dt><dd>{{ job['job_type'] }}</dd></div>
     <div><dt>Created</dt><dd>{{ job['created_at'] }}</dd></div>
     <div><dt>Started</dt><dd>{{ job['started_at'] or '-' }}</dd></div>
     <div><dt>Finished</dt><dd>{{ job['finished_at'] or '-' }}</dd></div>
-    <div><dt>Run</dt><dd>{{ job['run_id'] or '-' }}</dd></div>
+    <div><dt>Progress</dt><dd>{{ job['progress_summary'] or '-' }}</dd></div>
+    <div><dt>Snapshot run</dt><dd>{{ job['run_id'] or '-' }}</dd></div>
   </dl>
   {% if job['error_text'] %}
   <p class="error-block">{{ job['error_text'] }}</p>

@@ -20,7 +20,7 @@ import ssl
 import sys
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, urljoin
 from urllib.request import (
@@ -487,13 +487,17 @@ def read_catalog_store(store_dir: str, workspace: str) -> CatalogStore:
     raise RuntimeError("No datastore.xml or coveragestore.xml found in {}".format(store_dir))
 
 
-def list_catalog_workspaces(data_dir: str) -> Tuple[List[str], List[CatalogStore]]:
+def list_catalog_workspaces(
+    data_dir: str,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
+) -> Tuple[List[str], List[CatalogStore]]:
     workspaces_root = os.path.join(data_dir, "workspaces")
     if not os.path.isdir(workspaces_root):
         raise RuntimeError("GeoServer workspaces directory does not exist: {}".format(workspaces_root))
 
     workspace_names: List[str] = []
     catalog_stores: List[CatalogStore] = []
+    discovered_count = 0
 
     for entry in sorted(os.scandir(workspaces_root), key=lambda item: item.name.lower()):
         if not entry.is_dir():
@@ -533,6 +537,9 @@ def list_catalog_workspaces(data_dir: str) -> Tuple[List[str], List[CatalogStore
                         notes=str(exc),
                     )
                 )
+            discovered_count += 1
+            if progress_callback is not None:
+                progress_callback(discovered_count, workspace)
 
     return workspace_names, catalog_stores
 
@@ -862,11 +869,16 @@ def build_error_row(
     )
 
 
-def collect_rest_catalog(client: Optional[GeoServerClient], data_dir: str) -> Tuple[List[str], List[CatalogStore], List[dict]]:
+def collect_rest_catalog(
+    client: Optional[GeoServerClient],
+    data_dir: str,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
+) -> Tuple[List[str], List[CatalogStore], List[dict]]:
     workspace_names = list_workspaces(client)
     LOGGER.info("Discovered %d workspace(s) via REST", len(workspace_names))
     catalog_stores: List[CatalogStore] = []
     error_rows: List[dict] = []
+    discovered_count = 0
 
     for workspace in workspace_names:
         for store_kind in ("coveragestores", "datastores"):
@@ -914,6 +926,9 @@ def collect_rest_catalog(client: Optional[GeoServerClient], data_dir: str) -> Tu
                             layer_names=layer_names,
                         )
                     )
+                    discovered_count += 1
+                    if progress_callback is not None:
+                        progress_callback(discovered_count, workspace)
                 except Exception as exc:
                     LOGGER.warning(
                         "Failed to collect REST metadata for workspace=%s kind=%s store=%s: %s",
