@@ -7,5 +7,5 @@ services:
     environment:
       SKIP_DEMO_DATA: "true"
     volumes:
-      - ./docker/geoserver_data:/opt/geoserver_data
+      - ./geoserver_data:/opt/geoserver_data
     restart: unless-stopped

@@ -5,8 +5,8 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-docker/downloads/
-docker/geoserver_data/
+geoserver_test/downloads/
+geoserver_test/geoserver_data/
 
 reports/*.csv
 reports/*.html
@@ -14,3 +14,4 @@ reports/*.html
 .env
 .venv/
 venv/
+app_data/

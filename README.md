@@ -4,6 +4,15 @@
 
 `geoserver_store_report.py` generates a CSV inventory of data used by a GeoServer instance.
 
+The repository now also includes a web application that builds on the same inventory logic:
+
+- `FastAPI` backend
+- `Jinja2` templates
+- `HTMX` for partial page refresh and job polling
+- `SQLite` snapshot cache and job tracking
+
+GeoServer fixture assets for local testing are organized under [geoserver_test](c:\Alex\work\geoserver_cleaner\geoserver_test).
+
 It is intended for cases where a GeoServer installation has accumulated a large amount of data on disk and the user needs to understand:
 
 - which stores consume the most space
@@ -259,7 +268,116 @@ Examples:
 
 The script scans `data_dir/data` and compares its contents against all store paths that were successfully resolved.
 
-If workspaces are excluded with `--exclude-workspaces`, stores from those workspaces are omitted from report rows and their data is not treated as orphaned.
+## Cleanup Web App
+
+The application lives under [app](c:\Alex\work\geoserver_cleaner\app) and implements the first full cleanup workflow:
+
+- inventory page with server-side paging, filtering, and sorting
+- multi-select store selection
+- delete preview page with path safety checks
+- background scan and delete jobs
+- automatic inventory refresh after delete jobs
+
+The application reuses the filesystem-first scan logic from [geoserver_store_report.py](c:\Alex\work\geoserver_cleaner\geoserver_store_report.py).
+
+### Web App Requirements
+
+- Python 3.13
+- packages from [requirements.txt](c:\Alex\work\geoserver_cleaner\requirements.txt)
+- local access to the GeoServer data directory
+- GeoServer REST credentials for delete operations and REST fallback
+
+### Web App Configuration
+
+Environment variables:
+
+- `GEOSERVER_URL`
+- `GEOSERVER_USER`
+- `GEOSERVER_PASSWORD`
+- `GEOSERVER_DATA_DIR`
+- `GEOSERVER_CATALOG_SOURCE`
+  `auto`, `filesystem`, or `rest`
+- `GEOSERVER_EXCLUDE_WORKSPACES`
+- `APP_DATABASE_PATH`
+- `ALLOW_PHYSICAL_DELETE`
+- `ALLOWED_DATA_ROOTS`
+- `APP_PAGE_SIZE_DEFAULT`
+- `APP_PAGE_SIZE_MAX`
+
+Important note:
+
+- physical delete is disabled by default
+- when enabled, the application deletes only under `ALLOWED_DATA_ROOTS`
+- the scan form in the web UI also accepts a comma-separated exclude list and persists that choice into the generated snapshot
+
+### Run The Web App
+
+Install dependencies:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+Run locally:
+
+```powershell
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Open:
+
+```text
+http://localhost:8000/stores
+```
+
+### Docker Run
+
+Build and run with Docker Compose:
+
+```powershell
+docker compose -f docker-compose.geoserver-cleaner.yml up --build
+```
+
+The compose example is in [docker-compose.geoserver-cleaner.yml](c:\Alex\work\geoserver_cleaner\docker-compose.geoserver-cleaner.yml). It mounts:
+
+- GeoServer data directory at `/geoserver_data`
+- application database at `/app_data`
+
+By default the example mounts the local fixture directory:
+
+- [geoserver_test/geoserver_data](c:\Alex\work\geoserver_cleaner\geoserver_test\geoserver_data)
+
+### Current Scope
+
+The web app is an MVP implementation of the design review in [FASTAPI_APP_DESIGN_REVIEW.md](c:\Alex\work\geoserver_cleaner\FASTAPI_APP_DESIGN_REVIEW.md).
+
+Implemented now:
+
+- inventory snapshots persisted in SQLite
+- `/stores` page with server-side table queries
+- `/delete/preview` safety preview
+- `/delete/execute` background job
+- `/scan` background job
+- `/jobs/{id}` status page
+
+Not implemented yet:
+
+- user authentication and RBAC
+- partial workspace-only refresh after delete
+- richer audit browsing UI
+- batch progress itemization per store in the job page
+
+If workspaces are excluded with `--exclude-workspaces`, or with the web app scan exclude field, stores from those workspaces are omitted from report rows and their data is not treated as orphaned.
+
+## GeoServer Test Fixture
+
+The local Docker GeoServer fixture and its population scripts now live in [geoserver_test](c:\Alex\work\geoserver_cleaner\geoserver_test):
+
+- [geoserver_test/docker-compose.geoserver-test.yml](c:\Alex\work\geoserver_cleaner\geoserver_test\docker-compose.geoserver-test.yml)
+- [geoserver_test/populate_geoserver_natural_earth.py](c:\Alex\work\geoserver_cleaner\geoserver_test\populate_geoserver_natural_earth.py)
+- [geoserver_test/populate_geoserver_bulk_mock.py](c:\Alex\work\geoserver_cleaner\geoserver_test\populate_geoserver_bulk_mock.py)
+
+The GeoServer Cleaner Docker image ignores that directory through [.dockerignore](c:\Alex\work\geoserver_cleaner\.dockerignore), so fixture data and downloads are not copied into the application image build context.
 
 It reports:
 

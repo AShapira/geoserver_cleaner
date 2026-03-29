@@ -1,0 +1,23 @@
+services:
+  geoserver-cleaner:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    ports:
+      - "8000:8000"
+    environment:
+      GEOSERVER_URL: http://host.docker.internal:8081/geoserver
+      GEOSERVER_USER: admin
+      GEOSERVER_PASSWORD: geoserver
+      GEOSERVER_DATA_DIR: /geoserver_data
+      GEOSERVER_CATALOG_SOURCE: filesystem
+      GEOSERVER_EXCLUDE_WORKSPACES: ""
+      APP_DATABASE_PATH: /app_data/geoserver_cleaner.sqlite3
+      ALLOW_PHYSICAL_DELETE: "true"
+      ALLOWED_DATA_ROOTS: /geoserver_data/data
+    volumes:
+      - ./geoserver_test/geoserver_data:/geoserver_data
+      - geoserver-cleaner-app-data:/app_data
+
+volumes:
+  geoserver-cleaner-app-data:

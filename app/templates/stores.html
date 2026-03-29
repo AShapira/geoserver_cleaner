@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-shell" data-selection-root>
+  <section class="inventory-topbar">
+    <div class="inventory-topbar-main">
+      <div class="inventory-title-block">
+        <p class="eyebrow">Inventory</p>
+        <div class="inventory-title-row">
+          <h1>{{ app_title }}</h1>
+          <span class="snapshot-pill">
+            {% if summary %}
+            Snapshot #{{ summary.id }} · {{ summary.finished_at }}
+            {% else %}
+            No snapshot yet
+            {% endif %}
+          </span>
+        </div>
+        <div class="inventory-meta-line">
+          <span><strong>GeoServer</strong> {{ summary.geoserver_url if summary else request.app.state.settings.geoserver_url }}</span>
+          <span><strong>Data Dir</strong> {{ summary.data_dir if summary else request.app.state.settings.data_dir }}</span>
+          <span><strong>Physical Delete</strong> {% if physical_delete_enabled %}Enabled{% else %}Disabled{% endif %}</span>
+          <span><strong>Excluded</strong> {{ current_excluded_workspaces or 'None' }}</span>
+        </div>
+      </div>
+      <form action="/scan" method="post" class="scan-form compact-scan-form">
+        <label class="field-label-inline" for="excludeWorkspaces">Exclude workspaces</label>
+        <input id="excludeWorkspaces" type="text" name="exclude_workspaces" value="{{ current_excluded_workspaces }}" placeholder="workspace_a,workspace_b">
+        <button class="primary-button" type="submit">Recalculate Inventory</button>
+        <a class="ghost-button" href="/stores">Reset View</a>
+      </form>
+    </div>
+    <div class="inventory-chip-row">
+      <span class="metric-chip">
+        <strong>{% if summary %}{{ summary.store_count }}{% else %}0{% endif %}</strong>
+        <span>Stores</span>
+      </span>
+      <span class="metric-chip">
+        <strong>{% if summary %}{{ summary.orphan_count }}{% else %}0{% endif %}</strong>
+        <span>Orphans</span>
+      </span>
+      <span class="metric-chip">
+        <strong>{% if summary %}{{ summary.tracked_size_gb }} GB{% else %}0.00 GB{% endif %}</strong>
+        <span>Tracked Size</span>
+      </span>
+      {% if running_jobs %}
+      {% for job in running_jobs %}
+      <a class="job-chip" href="/jobs/{{ job['id'] }}">
+        <strong>Job #{{ job['id'] }}</strong>
+        <span>{{ job['progress_summary'] or job['message'] }}{% if job['eta_display'] %} · ETA {{ job['eta_display'] }}{% endif %}</span>
+      </a>
+      {% endfor %}
+      {% endif %}
+    </div>
+  </section>
+
+  {% if latest_run %}
+  <section class="inventory-controls-panel">
+    <form
+      id="filtersForm"
+      action="/stores"
+      method="get"
+      hx-get="/stores/table"
+      hx-trigger="change from:select, input changed delay:250ms from:input[name='q']"
+      hx-target="#storesTableShell"
+      hx-push-url="true"
+      hx-swap="innerHTML"
+      hx-sync="this:replace"
+      class="inventory-filters-form"
+    >
+      <div class="filters-grid">
+        <label class="filter-field">
+          <span>Search</span>
+          <input type="search" name="q" value="{{ table_state.query }}" placeholder="Search workspace, store, path, or notes">
+        </label>
+        <label class="filter-field">
+          <span>Workspace</span>
+          <select name="workspace">
+            <option value="">All workspaces</option>
+            {% for item in table_state.filters.workspaces %}
+            <option value="{{ item }}" {% if item == table_state.workspace %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="filter-field">
+          <span>Status</span>
+          <select name="status">
+            <option value="">All statuses</option>
+            {% for item in table_state.filters.statuses %}
+            <option value="{{ item }}" {% if item == table_state.status %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="filter-field">
+          <span>Row kind</span>
+          <select name="row_kind">
+            <option value="">All row kinds</option>
+            {% for item in table_state.filters.row_kinds %}
+            <option value="{{ item }}" {% if item == table_state.row_kind %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="filter-field">
+          <span>Store type</span>
+          <select name="store_type">
+            <option value="">All store types</option>
+            {% for item in table_state.filters.store_types %}
+            <option value="{{ item }}" {% if item == table_state.store_type %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="filter-field">
+          <span>Page size</span>
+          <select name="page_size">
+            {% for item in [50, 100, 250, 500] %}
+            <option value="{{ item }}" {% if item == table_state.page_size %}selected{% endif %}>{{ item }} per page</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <input type="hidden" name="sort_by" value="{{ table_state.sort_by }}">
+      <input type="hidden" name="sort_dir" value="{{ table_state.sort_dir }}">
+      <input type="hidden" name="page" value="1">
+    </form>
+    <form action="/delete/preview" method="post" id="selectionForm" class="selection-toolbar">
+      <input type="hidden" name="selected_ids" value="" data-selection-target>
+      <div class="selection-toolbar-copy">
+        <strong data-selection-count>0 selected</strong>
+        <span>
+          {% if table_state.total %}
+          {{ table_state.total }} filtered row(s)
+          {% else %}
+          0 filtered row(s)
+          {% endif %}
+        </span>
+      </div>
+      <div class="selection-toolbar-actions">
+        <div id="filterStatus" class="filter-status htmx-indicator">Filtering...</div>
+        <button class="primary-button" type="submit" data-selection-submit disabled>Preview Delete</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="storesTableShell">
+    {% include "_stores_table.html" %}
+  </section>
+  {% else %}
+  <section class="empty-panel">
+    <h2>No inventory snapshot yet</h2>
+    <p>Run the first scan to load GeoServer contents into the application database.</p>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}
