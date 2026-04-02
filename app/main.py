@@ -8,8 +8,9 @@ import time
 from typing import Dict
 from urllib.parse import urlencode
 
+import geoserver_store_report as report
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -41,6 +42,17 @@ app.state.asset_version = str(int(time.time()))
 
 def query_string(params: Dict[str, object]) -> str:
     return urlencode({key: value for key, value in params.items() if value not in ("", None)})
+
+
+def latest_run_or_404() -> object:
+    latest_run = db.get_latest_completed_run(SETTINGS.database_path)
+    if latest_run is None:
+        raise HTTPException(status_code=404, detail="No completed inventory snapshot is available.")
+    return latest_run
+
+
+def build_report_filename(run_id: int, suffix: str) -> str:
+    return "geoserver_store_report_snapshot_{}.{}".format(run_id, suffix)
 
 
 def format_duration(seconds) -> str:
@@ -227,7 +239,6 @@ def stores_page(request: Request):
         "summary": summary,
         "latest_run": latest_run,
         "running_jobs": [serialize_job(item) for item in db.list_running_jobs(SETTINGS.database_path)],
-        "physical_delete_enabled": SETTINGS.allow_physical_delete,
         "current_excluded_workspaces": current_excluded_workspaces,
     }
     if latest_run is not None:
@@ -270,6 +281,18 @@ def job_detail(request: Request, job_id: int):
     )
 
 
+@app.get("/jobs/{job_id}/header", response_class=HTMLResponse)
+def job_header_fragment(request: Request, job_id: int):
+    job = db.get_job(SETTINGS.database_path, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return TEMPLATES.TemplateResponse(
+        request,
+        "_job_header.html",
+        {"job": serialize_job(job)},
+    )
+
+
 @app.get("/jobs/{job_id}/status", response_class=HTMLResponse)
 def job_status_fragment(request: Request, job_id: int):
     job = db.get_job(SETTINGS.database_path, job_id)
@@ -284,9 +307,7 @@ def job_status_fragment(request: Request, job_id: int):
 
 @app.post("/delete/preview", response_class=HTMLResponse)
 def delete_preview(request: Request, selected_ids: str = Form("")):
-    latest_run = db.get_latest_completed_run(SETTINGS.database_path)
-    if latest_run is None:
-        raise HTTPException(status_code=400, detail="No completed inventory snapshot is available.")
+    latest_run = latest_run_or_404()
     store_ids = deletion.parse_selected_ids(selected_ids)
     preview = deletion.build_delete_preview(
         SETTINGS.database_path,
@@ -299,9 +320,8 @@ def delete_preview(request: Request, selected_ids: str = Form("")):
         "delete_preview.html",
         {
             "preview": preview,
-            "selected_ids": ",".join(str(item) for item in store_ids),
+            "selected_ids": ",".join(str(item) for item in preview["selected_ids"]),
             "run_id": int(latest_run["id"]),
-            "physical_delete_enabled": SETTINGS.allow_physical_delete,
         },
     )
 
@@ -314,10 +334,49 @@ def delete_execute(
     store_ids = deletion.parse_selected_ids(selected_ids)
     if not store_ids:
         raise HTTPException(status_code=400, detail="No stores were selected.")
+    preview = deletion.build_delete_preview(
+        SETTINGS.database_path,
+        SETTINGS,
+        run_id,
+        store_ids,
+    )
+    valid_store_ids = preview["selected_ids"]
+    if not valid_store_ids:
+        raise HTTPException(status_code=400, detail="No deletable store rows were selected.")
     run = db.get_run(SETTINGS.database_path, run_id)
     excluded_workspaces_raw = str(run["excluded_workspaces"]) if run is not None else SETTINGS.excluded_workspaces_raw
     try:
-        job_id = app.state.job_manager.start_delete(run_id, store_ids, excluded_workspaces_raw)
+        job_id = app.state.job_manager.start_delete(run_id, valid_store_ids, excluded_workspaces_raw)
     except Exception as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return RedirectResponse(url="/jobs/{}".format(job_id), status_code=303)
+
+
+@app.get("/reports/latest.csv")
+def download_latest_csv() -> Response:
+    latest_run = latest_run_or_404()
+    rows = [dict(row) for row in db.get_run_rows(SETTINGS.database_path, int(latest_run["id"]))]
+    filename = build_report_filename(int(latest_run["id"]), "csv")
+    return Response(
+        content=report.build_csv_bytes(rows),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="{}"'.format(filename)},
+    )
+
+
+@app.get("/reports/latest.html")
+def download_latest_html() -> Response:
+    latest_run = latest_run_or_404()
+    rows = [dict(row) for row in db.get_run_rows(SETTINGS.database_path, int(latest_run["id"]))]
+    excluded_workspaces = sorted(report.parse_excluded_workspaces(str(latest_run["excluded_workspaces"] or "")))
+    filename = build_report_filename(int(latest_run["id"]), "html")
+    return Response(
+        content=report.build_html_report_text(
+            rows,
+            excluded_workspaces,
+            str(latest_run["geoserver_url"] or SETTINGS.geoserver_url),
+            str(latest_run["data_dir"] or SETTINGS.data_dir),
+        ),
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="{}"'.format(filename)},
+    )

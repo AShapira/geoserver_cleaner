@@ -1,26 +1,7 @@
 {% extends "base.html" %}
 {% block body %}
 <div class="page-shell narrow-shell">
-  <section class="hero">
-    <div>
-      <p class="eyebrow">Job</p>
-      <h1>Job #{{ job['id'] }}</h1>
-      <p class="lede">{{ job['message'] }}</p>
-    </div>
-    <div class="action-row">
-      <a class="ghost-button" href="/stores">Back to inventory</a>
-    </div>
-  </section>
-
-  <section
-    id="jobStatus"
-    {% if job['status'] in ['queued', 'running'] %}
-    hx-get="/jobs/{{ job['id'] }}/status"
-    hx-trigger="load, every 3s"
-    hx-swap="outerHTML"
-    {% endif %}
-  >
-    {% include "_job_status.html" %}
-  </section>
+  {% include "_job_header.html" %}
+  {% include "_job_status.html" %}
 </div>
 {% endblock %}

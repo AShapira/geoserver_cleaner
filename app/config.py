@@ -26,8 +26,6 @@ class Settings:
     timeout: int
     workers: int
     database_path: str
-    allow_physical_delete: bool
-    allowed_data_roots_raw: str
     page_size_default: int
     page_size_max: int
     app_title: str
@@ -37,7 +35,6 @@ class Settings:
         data_dir = os.path.abspath(
             os.getenv("GEOSERVER_DATA_DIR", os.path.join(os.getcwd(), "geoserver_test", "geoserver_data"))
         )
-        default_root = os.path.join(data_dir, "data")
         return cls(
             geoserver_url=os.getenv("GEOSERVER_URL", "http://localhost:8081/geoserver"),
             geoserver_username=os.getenv("GEOSERVER_USER", "admin"),
@@ -51,8 +48,6 @@ class Settings:
             database_path=os.path.abspath(
                 os.getenv("APP_DATABASE_PATH", os.path.join(os.getcwd(), "app_data", "geoserver_cleaner.sqlite3"))
             ),
-            allow_physical_delete=_bool_env("ALLOW_PHYSICAL_DELETE", False),
-            allowed_data_roots_raw=os.getenv("ALLOWED_DATA_ROOTS", default_root),
             page_size_default=int(os.getenv("APP_PAGE_SIZE_DEFAULT", "100")),
             page_size_max=int(os.getenv("APP_PAGE_SIZE_MAX", "500")),
             app_title=os.getenv("APP_TITLE", "GeoServer Cleaner"),
@@ -61,8 +56,3 @@ class Settings:
     @property
     def excluded_workspaces(self) -> List[str]:
         return sorted(report.parse_excluded_workspaces(self.excluded_workspaces_raw))
-
-    @property
-    def allowed_data_roots(self) -> List[str]:
-        roots = [item.strip() for item in self.allowed_data_roots_raw.split(",") if item.strip()]
-        return [os.path.normcase(os.path.normpath(os.path.abspath(item))) for item in roots]

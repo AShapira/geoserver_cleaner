@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import os
-import shutil
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Sequence, Set
+from typing import Callable, Dict, List, Optional, Sequence
 
 import geoserver_store_report as report
 
@@ -25,7 +23,8 @@ class DeletePlanItem:
     resolved_path: str
     normalized_path: str
     can_delete_store: bool
-    can_delete_files: bool
+    can_delete_data: bool
+    data_scope: str
     reason: str
 
 
@@ -60,41 +59,50 @@ def build_delete_preview(
     items: List[DeletePlanItem] = []
     delete_paths: List[str] = []
     warnings: List[str] = []
+    internal_root = report.normalize_path(settings.data_dir)
 
     for row in ordered_rows:
         reason_parts: List[str] = []
         can_delete_store = True
-        can_delete_files = settings.allow_physical_delete
+        can_delete_data = False
+        data_scope = "unknown"
         normalized_path = str(row["normalized_path"] or "")
         resolved_path = str(row["resolved_path"] or "")
         store_kind = str(row["store_kind"] or "")
+        path_kind = str(row["path_kind"] or "")
 
         if row["row_kind"] != "store":
             can_delete_store = False
-            can_delete_files = False
-            reason_parts.append("Only store rows can be deleted.")
-        if not row["workspace"] or not row["store_name"] or not store_kind:
+            data_scope = "orphaned"
+            reason_parts.append("Orphan rows are report-only and cannot be deleted here.")
+        elif not row["workspace"] or not row["store_name"] or not store_kind:
             can_delete_store = False
+            data_scope = "invalid"
             reason_parts.append("Store metadata is incomplete.")
-        if normalized_path:
-            owners = path_map.get(normalized_path, [])
-            owner_ids = {int(owner["id"]) for owner in owners}
-            if owner_ids - selected_ids:
-                can_delete_files = False
-                reason_parts.append("Physical delete blocked because the path is shared with another store.")
-            if not report.path_under_any_root(normalized_path, settings.allowed_data_roots):
-                can_delete_files = False
-                reason_parts.append("Physical delete blocked because the path is outside allowed roots.")
         else:
-            can_delete_files = False
-        if str(row["path_kind"] or "") == "missing":
-            can_delete_files = False
-            reason_parts.append("Resolved path is already missing.")
-        if not settings.allow_physical_delete:
-            can_delete_files = False
-            reason_parts.append("Physical delete is disabled by configuration.")
+            if not normalized_path:
+                data_scope = "unresolved"
+                reason_parts.append("GeoServer will delete store configuration only; path is unresolved or missing.")
+            elif path_kind == "missing":
+                data_scope = "missing"
+                reason_parts.append("GeoServer will delete store configuration only; path is unresolved or missing.")
+            elif not report.path_under_any_root(normalized_path, [internal_root]):
+                data_scope = "external"
+                reason_parts.append("GeoServer will delete store configuration only; data is outside data_dir.")
+            else:
+                owners = path_map.get(normalized_path, [])
+                owner_ids = {int(owner["id"]) for owner in owners}
+                if owner_ids - selected_ids:
+                    data_scope = "shared"
+                    reason_parts.append(
+                        "GeoServer will delete store configuration only; the data path is shared with another store."
+                    )
+                else:
+                    data_scope = "internal"
+                    can_delete_data = True
+                    reason_parts.append("GeoServer will delete store configuration and internal data.")
 
-        if can_delete_files and resolved_path:
+        if can_delete_data and resolved_path:
             delete_paths.append(resolved_path)
 
         items.append(
@@ -108,17 +116,18 @@ def build_delete_preview(
                 resolved_path=resolved_path,
                 normalized_path=normalized_path,
                 can_delete_store=can_delete_store,
-                can_delete_files=can_delete_files,
+                can_delete_data=can_delete_data,
+                data_scope=data_scope,
                 reason=" ".join(reason_parts).strip(),
             )
         )
 
     if not items:
         warnings.append("No valid stores were selected.")
-    if settings.allow_physical_delete:
-        warnings.append("Physical deletion is enabled. Confirm the preview before executing.")
     else:
-        warnings.append("Physical deletion is disabled. Only GeoServer configuration will be removed.")
+        warnings.append("GeoServer REST deletion is always used with recurse=true and purge=all.")
+        warnings.append("Delete Data = Yes means GeoServer can purge data inside data_dir for that store.")
+        warnings.append("Delete Data = No means store deletion is configuration-only or the data ownership is uncertain.")
 
     unique_paths = sorted(set(delete_paths), key=lambda value: value.lower())
     return {
@@ -127,24 +136,8 @@ def build_delete_preview(
         "delete_paths": unique_paths,
         "warnings": warnings,
         "blocked_count": len([item for item in items if not item.can_delete_store]),
-        "file_delete_count": len(unique_paths),
+        "delete_data_count": len(unique_paths),
     }
-
-
-def delete_store_paths(paths: Sequence[str], settings: Settings) -> List[str]:
-    deleted: List[str] = []
-    for path in paths:
-        normalized = report.normalize_path(path)
-        if not report.path_under_any_root(normalized, settings.allowed_data_roots):
-            raise RuntimeError("Refusing to delete path outside allowed roots: {}".format(path))
-        if not os.path.exists(path):
-            continue
-        if os.path.isdir(path):
-            shutil.rmtree(path)
-        else:
-            os.remove(path)
-        deleted.append(path)
-    return deleted
 
 
 def execute_delete_job(
@@ -158,7 +151,6 @@ def execute_delete_job(
     items: List[DeletePlanItem] = preview["items"]
     deleted_store_keys: List[str] = []
     failed_items: List[str] = []
-    deleted_paths: Set[str] = set()
     total_items = len(items)
 
     if progress_callback is not None:
@@ -183,10 +175,6 @@ def execute_delete_job(
                 deleted_store_keys.append("{}/{}".format(item.workspace, item.store_name))
             except Exception as exc:
                 failed_items.append("{} / {}: {}".format(item.workspace, item.store_name, exc))
-            else:
-                if item.can_delete_files and item.resolved_path and item.normalized_path not in deleted_paths:
-                    delete_store_paths([item.resolved_path], settings)
-                    deleted_paths.add(item.normalized_path)
         if progress_callback is not None:
             remaining = max(total_items - index, 0)
             progress_callback(
@@ -208,14 +196,15 @@ def execute_delete_job(
             "run_id": run_id,
             "selected_store_ids": list(store_ids),
             "deleted_stores": deleted_store_keys,
-            "deleted_paths": sorted(deleted_paths),
+            "purge_candidate_paths": preview["delete_paths"],
             "failed_items": failed_items,
         },
     )
     return {
         "deleted_stores": deleted_store_keys,
         "deleted_count": len(deleted_store_keys),
-        "deleted_paths": sorted(deleted_paths),
+        "delete_data_count": int(preview["delete_data_count"]),
+        "purge_candidate_paths": list(preview["delete_paths"]),
         "failed_items": failed_items,
         "failed_count": len(failed_items),
         "processed_delete_items": total_items,

@@ -375,6 +375,14 @@ def get_rows_by_ids(db_path: str, run_id: int, store_ids: Sequence[int]) -> List
         ).fetchall()
 
 
+def get_run_rows(db_path: str, run_id: int) -> List[sqlite3.Row]:
+    with managed_connection(db_path) as connection:
+        return connection.execute(
+            "SELECT * FROM stores WHERE run_id = ? ORDER BY id ASC",
+            (run_id,),
+        ).fetchall()
+
+
 def get_path_owners(db_path: str, run_id: int, normalized_paths: Sequence[str]) -> Dict[str, List[sqlite3.Row]]:
     normalized_paths = [item for item in normalized_paths if item]
     if not normalized_paths:

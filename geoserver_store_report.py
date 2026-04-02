@@ -12,6 +12,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 import html
+import io
 import json
 import logging
 import os
@@ -1140,12 +1141,18 @@ def write_csv(path: str, rows: Sequence[dict]) -> None:
     if parent and not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)
 
+    with open(path, "wb") as handle:
+        handle.write(build_csv_bytes(rows))
+
+
+def build_csv_bytes(rows: Sequence[dict]) -> bytes:
     fieldnames = [column[0] for column in HTML_COLUMNS]
-    with open(path, "w", newline="", encoding="utf-8-sig") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    return buffer.getvalue().encode("utf-8-sig")
 
 
 def build_html_summary(rows: Sequence[dict], excluded_workspaces: Sequence[str]) -> dict:
@@ -1176,17 +1183,12 @@ def build_html_row_payload(rows: Sequence[dict]) -> List[dict]:
     return payload
 
 
-def write_html_report(
-    path: str,
+def build_html_report_text(
     rows: Sequence[dict],
     excluded_workspaces: Sequence[str],
     geoserver_url: str,
     data_dir: str,
-) -> None:
-    parent = os.path.dirname(os.path.abspath(path))
-    if parent and not os.path.isdir(parent):
-        os.makedirs(parent, exist_ok=True)
-
+) -> str:
     summary = build_html_summary(rows, excluded_workspaces)
     header_cells = []
     for key, label, sort_type in HTML_COLUMNS:
@@ -1202,7 +1204,7 @@ def write_html_report(
     )
     row_data = json_for_html_script(build_html_row_payload(rows))
 
-    html_text = """<!doctype html>
+    return """<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -1625,8 +1627,27 @@ def write_html_report(
         row_data=row_data,
     )
 
+
+def write_html_report(
+    path: str,
+    rows: Sequence[dict],
+    excluded_workspaces: Sequence[str],
+    geoserver_url: str,
+    data_dir: str,
+) -> None:
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent, exist_ok=True)
+
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write(html_text)
+        handle.write(
+            build_html_report_text(
+                rows,
+                excluded_workspaces,
+                geoserver_url,
+                data_dir,
+            )
+        )
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:

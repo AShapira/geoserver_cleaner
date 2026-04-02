@@ -19,7 +19,7 @@ def delete_store(settings: Settings, workspace: str, store_kind: str, store_name
     )
     workspace_q = quote(workspace, safe="")
     store_q = quote(store_name, safe="")
-    endpoint = "rest/workspaces/{}/{}/{}?recurse=true".format(workspace_q, store_kind, store_q)
+    endpoint = "rest/workspaces/{}/{}/{}?recurse=true&purge=all".format(workspace_q, store_kind, store_q)
     url = urljoin(client.base_url, endpoint)
     request = Request(
         url,

@@ -87,6 +87,19 @@ a { color: inherit; }
   justify-content: flex-end;
   flex: 0 1 42rem;
 }
+.inventory-topbar-actions {
+  display: grid;
+  gap: 0.8rem;
+  justify-items: end;
+  flex: 0 1 44rem;
+}
+.report-action-row {
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+}
 .inventory-chip-row {
   display: flex;
   gap: 0.7rem;
@@ -323,6 +336,11 @@ input[type="search"], select {
     font-size: 1.7rem;
   }
   .compact-scan-form {
+    justify-content: stretch;
+  }
+  .inventory-topbar-actions,
+  .report-action-row {
+    justify-items: stretch;
     justify-content: stretch;
   }
   .inventory-meta-line {

@@ -7,10 +7,10 @@
         <p class="eyebrow">Delete Preview</p>
         <div class="inventory-title-row">
           <h1>Review selected stores</h1>
-          <span class="snapshot-pill">{{ preview["items"]|length }} selected · {{ preview["file_delete_count"] }} paths</span>
+          <span class="snapshot-pill">{{ preview["items"]|length }} selected | {{ preview["delete_data_count"] }} internal data path(s)</span>
         </div>
         <div class="inventory-meta-line">
-          <span>This step shows which GeoServer stores can be removed and whether their data paths can also be deleted safely.</span>
+          <span>This step shows whether GeoServer will remove store configuration only or configuration plus internal data under data_dir.</span>
         </div>
       </div>
       <div class="action-row">
@@ -27,11 +27,11 @@
       </span>
       <span class="metric-chip">
         <strong>{{ preview["blocked_count"] }}</strong>
-        <span>Blocked Stores</span>
+        <span>Blocked Rows</span>
       </span>
       <span class="metric-chip">
-        <strong>{{ preview["file_delete_count"] }}</strong>
-        <span>Delete Paths</span>
+        <strong>{{ preview["delete_data_count"] }}</strong>
+        <span>Delete Data = Yes</span>
       </span>
       {% for warning in preview["warnings"] %}
       <span class="warning-chip">{{ warning }}</span>
@@ -40,13 +40,13 @@
     <div class="selection-toolbar preview-selection-toolbar">
       <div class="selection-toolbar-copy">
         <strong>Ready to execute</strong>
-        <span>Review the table and path list before continuing.</span>
+        <span>Store deletion always uses GeoServer REST. Orphan rows are report-only.</span>
       </div>
       <div class="selection-toolbar-actions">
         <form action="/delete/execute" method="post">
           <input type="hidden" name="selected_ids" value="{{ selected_ids }}">
           <input type="hidden" name="run_id" value="{{ run_id }}">
-          <button class="danger-button" type="submit" {% if not preview["items"] %}disabled{% endif %}>Delete Selected Stores</button>
+          <button class="danger-button" type="submit" {% if not preview["selected_ids"] %}disabled{% endif %}>Delete Selected Stores</button>
         </form>
         <a class="ghost-button" href="/stores">Cancel</a>
       </div>
@@ -56,7 +56,7 @@
   <section class="table-panel delete-preview-panel">
     <div class="table-toolbar">
       <strong>Selected stores</strong>
-      <div class="table-summary">Selected store review. Scroll inside the table for the full list.</div>
+      <div class="table-summary">Delete Store is a GeoServer catalog change. Delete Data indicates whether GeoServer can purge internal data with that delete.</div>
     </div>
     <div class="table-wrap preview-table-wrap">
       <table class="stores-table">
@@ -67,7 +67,7 @@
             <th>Type</th>
             <th>Status</th>
             <th>Delete Store</th>
-            <th>Delete Files</th>
+            <th>Delete Data</th>
             <th>Reason</th>
           </tr>
         </thead>
@@ -79,7 +79,7 @@
             <td>{{ item.store_type }}</td>
             <td>{{ item.status }}</td>
             <td>{% if item.can_delete_store %}Yes{% else %}Blocked{% endif %}</td>
-            <td>{% if item.can_delete_files %}Yes{% else %}No{% endif %}</td>
+            <td>{% if item.can_delete_data %}Yes{% else %}No{% endif %}</td>
             <td>{{ item.reason }}</td>
           </tr>
           {% endfor %}
@@ -90,7 +90,7 @@
 
   {% if preview["delete_paths"] %}
   <section class="path-list preview-path-list">
-    <h2>Physical paths scheduled for deletion</h2>
+    <h2>Internal data paths GeoServer may purge</h2>
     <ul class="scroll-list">
       {% for path in preview["delete_paths"] %}
       <li class="mono">{{ path }}</li>
