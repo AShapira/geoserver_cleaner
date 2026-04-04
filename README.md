@@ -1,326 +1,89 @@
-# GeoServer Store Report
+# GeoServer Cleaner
 
-## Purpose
+## Overview
 
-`geoserver_store_report.py` generates a CSV inventory of data used by a GeoServer instance.
+GeoServer Cleaner is a server-side cleanup tool for large GeoServer installations.
 
-The repository now also includes a web application that builds on the same inventory logic:
+It provides two interfaces over the same backend:
 
-- `FastAPI` backend
-- `Jinja2` templates
-- `HTMX` for partial page refresh and job polling
-- `SQLite` snapshot cache and job tracking
+- a web application for operators
+- an MCP server for LLM and agent workflows
 
-GeoServer fixture assets for local testing are organized under [geoserver_test](c:\Alex\work\geoserver_cleaner\geoserver_test).
+Both interfaces use the same inventory snapshot data, job model, GeoServer REST delete flow, and export logic.
 
-It is intended for cases where a GeoServer installation has accumulated a large amount of data on disk and the user needs to understand:
-
-- which stores consume the most space
-- which layers belong to each store
-- where the data is stored on disk
-- how many files belong to each store
-- which folders or files under `data_dir/data` are no longer referenced by GeoServer
-- a user-friendly sortable HTML version of the same report
-
-The script is designed to run in the QGIS Python shell or any regular Python environment available on the GeoServer workstation.
-
-## What The Script Does
-
-The script combines two sources of information:
-
-1. GeoServer REST API metadata
-   - workspaces
-   - store names
-   - store types
-   - published layer names
-   - configured data paths
-
-2. Filesystem scanning
-   - resolves each store to a local Windows path
-   - calculates total size in bytes and GB
-   - counts files
-   - includes common sidecar files for single-file datasets such as GeoTIFF, Shapefile, and GeoPackage
-   - scans `data_dir/data` for orphaned folders and files not referenced by any discovered store
-
-The script is hardened to continue when individual stores return bad REST responses. Those failures are logged and written as `error` rows instead of aborting the full report.
-
-The report contains one row per store, plus additional rows for orphaned data, and also writes a sortable HTML view.
-
-## Supported Store Scenarios
-
-The script is built for the storage patterns described in this project:
+The project is designed for installations where GeoServer contains many file-based stores under `data_dir`, including:
 
 - `GeoTIFF`
 - `ImageMosaic`
 - `Shapefile`
 - `GeoPackage`
 
-It should also work for some other file-based stores if GeoServer exposes a usable file path through REST, but the main logic is optimized for the store types above.
+## Main Capabilities
 
-## Requirements
+- scan GeoServer and build inventory snapshots in SQLite
+- calculate size and file counts per store
+- detect orphaned files and directories under `data_dir/data`
+- filter, sort, and review stores in the web UI
+- preview store deletion before execution
+- delete stores through GeoServer REST with `recurse=true&purge=all`
+- distinguish between:
+  - stores with data inside `data_dir`
+  - stores with data outside `data_dir`
+- export the latest snapshot as CSV or HTML
+- expose the same operational capabilities to agents through MCP
 
-- Windows machine with access to the GeoServer data directory
-- GeoServer REST API enabled
-- GeoServer URL, username, and password
-- Python available through QGIS shell or system Python
+Important behavior:
 
-The script uses only Python standard library modules. No external packages are required.
+- store deletion is always performed through GeoServer REST
+- orphan rows are report-only and cannot be deleted by the app or MCP server
+- if store data is outside `data_dir`, deleting the store is treated as a configuration-only operation
 
-## Configuration
+## Architecture
 
-The script accepts command-line arguments. Most parameters also have environment variable defaults.
+Core components:
 
-### Required Inputs
+- `FastAPI` backend
+- `Jinja2` templates
+- `HTMX` for partial page refresh and job polling
+- `SQLite` for inventory snapshots and jobs
+- `MCP` server over `stdio`
 
-- `--geoserver-url`
-  GeoServer base URL, for example:
-  `http://server:8080/geoserver`
+The shared backend lives under [app](c:/Alex/work/geoserver_cleaner/app).
 
-- `--password`
-  GeoServer password
+Main modules:
 
-- `--data-dir`
-  Path to the GeoServer data directory, not the `data` subfolder.
-  Example:
-  `D:\GeoServer\data_dir`
+- web app entry: [app/main.py](c:/Alex/work/geoserver_cleaner/app/main.py)
+- MCP server: [app/mcp/server.py](c:/Alex/work/geoserver_cleaner/app/mcp/server.py)
+- runtime launcher: [app/run.py](c:/Alex/work/geoserver_cleaner/app/run.py)
+- snapshot queries and exports: [app/services/snapshots.py](c:/Alex/work/geoserver_cleaner/app/services/snapshots.py)
+- deletion logic: [app/services/deletion.py](c:/Alex/work/geoserver_cleaner/app/services/deletion.py)
+- inventory scan logic: [app/services/inventory.py](c:/Alex/work/geoserver_cleaner/app/services/inventory.py)
 
-### Optional Inputs
+## Web Application
 
-- `--username`
-  GeoServer username
-  Default: `admin`
+The web UI is intended for manual cleanup operations.
 
-- `--output-csv`
-  Output CSV file path
-  Default: `.\geoserver_store_report.csv`
+Current workflow:
 
-- `--output-html`
-  Optional HTML output file path
-  Default: same as CSV output path but with `.html` extension
+1. run an inventory scan
+2. review the latest snapshot on `/stores`
+3. filter and select stores
+4. inspect the delete preview
+5. execute a delete job
+6. review the refreshed snapshot
 
-- `--exclude-workspaces`
-  Optional comma-separated list of workspaces to exclude from the report
-  Stores from excluded workspaces are omitted from report rows, and data belonging to those workspaces is not marked as orphaned
+Implemented UI capabilities:
 
-- `--log-level`
-  Logging level
-  Default: `INFO`
-
-- `--timeout`
-  REST request timeout in seconds
-  Default: `60`
-
-- `--insecure`
-  Disables HTTPS certificate validation
-  Use only if GeoServer is exposed through HTTPS with an untrusted certificate
-
-### Environment Variables
-
-Instead of passing some values every time, the following environment variables can be used:
-
-- `GEOSERVER_URL`
-- `GEOSERVER_USER`
-- `GEOSERVER_PASSWORD`
-- `GEOSERVER_DATA_DIR`
-
-Command-line arguments override environment variable values.
-
-## Usage
-
-Example command:
-
-```powershell
-python geoserver_store_report.py `
-  --geoserver-url "http://server:8080/geoserver" `
-  --username "admin" `
-  --password "secret" `
-  --data-dir "D:\GeoServer\data_dir" `
-  --output-csv "D:\reports\geoserver_store_report.csv"
-```
-
-Example excluding workspaces and writing both outputs explicitly:
-
-```powershell
-python geoserver_store_report.py `
-  --geoserver-url "http://server:8080/geoserver" `
-  --username "admin" `
-  --password "secret" `
-  --data-dir "D:\GeoServer\data_dir" `
-  --output-csv "D:\reports\geoserver_store_report.csv" `
-  --output-html "D:\reports\geoserver_store_report.html" `
-  --exclude-workspaces "workspace_a,workspace_b" `
-  --log-level INFO
-```
-
-Example with insecure HTTPS:
-
-```powershell
-python geoserver_store_report.py `
-  --geoserver-url "https://server/geoserver" `
-  --username "admin" `
-  --password "secret" `
-  --data-dir "D:\GeoServer\data_dir" `
-  --output-csv "D:\reports\geoserver_store_report.csv" `
-  --insecure
-```
-
-## Output
-
-The script writes:
-
-- a CSV file with one row per store and additional rows for orphaned data
-- a sortable HTML file with summary cards, filtering, and clickable column sorting
-
-### CSV Columns
-
-- `row_kind`
-  `store` or `orphaned`
-
-- `workspace`
-  GeoServer workspace name for store rows
-
-- `store_name`
-  GeoServer store name
-
-- `store_type`
-  Store type as reported by GeoServer
-
-- `layer_names`
-  Comma-separated list of published layer names for the store
-
-- `configured_path`
-  Path or URL value extracted from GeoServer store configuration
-
-- `resolved_path`
-  Local Windows path used for filesystem scanning
-
-- `path_kind`
-  `directory`, `file`, `missing`, or empty if unresolved
-
-- `size_bytes`
-  Total size of the scanned store or orphaned item in bytes
-
-- `size_gb`
-  Total size in GB, rounded to 2 decimal places
-
-- `file_count`
-  Number of files counted for that row
-
-- `status`
-  Processing result for that row
-
-- `notes`
-  Additional explanation, especially for missing, unresolved, error, or orphaned rows
-
-### HTML Report
-
-The HTML report is intended for manual review and cleanup planning.
-
-It includes:
-
-- summary cards for store count, orphan count, issue count, and tracked size
-- a searchable table
-- clickable column headers for sorting
-- status color coding for quick scanning
-- metadata showing the GeoServer URL, data directory, excluded workspaces, and generation time
-
-## Status Values
-
-Typical `status` values:
-
-- `ok`
-  Store was resolved and scanned successfully
-
-- `missing`
-  Store path was resolved but does not exist on disk
-
-- `unresolved`
-  The script could not extract a usable filesystem path from the store configuration
-
-- `error`
-  The script encountered an exception while processing the store or scanning orphaned data
-
-- `orphaned`
-  File or directory under `data_dir/data` is not referenced by any discovered store
-
-## How Store Size Is Calculated
-
-### Directory-Based Stores
-
-For directory-based stores such as `ImageMosaic`, the script scans the entire directory recursively and sums all files under that directory.
-
-### File-Based Stores
-
-For file-based stores such as `GeoTIFF`, `Shapefile`, and `GeoPackage`, the script includes the main dataset and common sidecar files in the same folder.
-
-Examples:
-
-- GeoTIFF:
-  `.tif`, `.ovr`, `.aux.xml`, `.prj`, `.tfw`, and similar sidecar files
-
-- Shapefile:
-  `.shp`, `.shx`, `.dbf`, `.prj`, `.cpg`, `.qix`, and common related files with the same base name
-
-- GeoPackage:
-  `.gpkg` and common journal side files such as `-wal` and `-shm`
-
-## Orphaned Data Detection
-
-The script scans `data_dir/data` and compares its contents against all store paths that were successfully resolved.
-
-## Cleanup Web App
-
-The application lives under [app](c:\Alex\work\geoserver_cleaner\app) and implements the first full cleanup workflow:
-
-- inventory page with server-side paging, filtering, and sorting
-- multi-select store selection
-- delete preview page with path safety checks
+- server-side paging, filtering, and sorting
 - background scan and delete jobs
-- automatic inventory refresh after delete jobs
-
-The application reuses the filesystem-first scan logic from [geoserver_store_report.py](c:\Alex\work\geoserver_cleaner\geoserver_store_report.py).
-
-### Web App Requirements
-
-- Python 3.13
-- packages from [requirements.txt](c:\Alex\work\geoserver_cleaner\requirements.txt)
-- local access to the GeoServer data directory
-- GeoServer REST credentials for delete operations and REST fallback
-
-### Web App Configuration
-
-Environment variables:
-
-- `GEOSERVER_URL`
-- `GEOSERVER_USER`
-- `GEOSERVER_PASSWORD`
-- `GEOSERVER_DATA_DIR`
-- `GEOSERVER_CATALOG_SOURCE`
-  `auto`, `filesystem`, or `rest`
-- `GEOSERVER_EXCLUDE_WORKSPACES`
-- `APP_DATABASE_PATH`
-- `ALLOW_PHYSICAL_DELETE`
-- `ALLOWED_DATA_ROOTS`
-- `APP_PAGE_SIZE_DEFAULT`
-- `APP_PAGE_SIZE_MAX`
-
-Important note:
-
-- physical delete is disabled by default
-- when enabled, the application deletes only under `ALLOWED_DATA_ROOTS`
-- the scan form in the web UI also accepts a comma-separated exclude list and persists that choice into the generated snapshot
-
-### Run The Web App
-
-Install dependencies:
-
-```powershell
-python -m pip install -r requirements.txt
-```
+- live job progress pages
+- delete preview with internal/external data explanation
+- CSV and HTML snapshot download buttons
 
 Run locally:
 
 ```powershell
+python -m pip install -r requirements.txt
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -330,80 +93,150 @@ Open:
 http://localhost:8000/stores
 ```
 
-### Docker Run
+## MCP Server
 
-Build and run with Docker Compose:
+The MCP server is intended for LLM and agent usage and runs against the same database and GeoServer configuration as the web app.
+
+Transport:
+
+- `stdio`
+
+Current MCP tools:
+
+- `get_latest_snapshot`
+- `start_inventory_scan`
+- `get_job_status`
+- `list_heaviest_stores`
+- `summarize_workspace_usage`
+- `list_orphans`
+- `find_stores`
+- `delete_stores`
+- `export_snapshot_csv`
+- `export_snapshot_html`
+
+Examples of supported agent use:
+
+- `list 5 heaviest stores`
+- `summarize disk usage by workspaces`
+- `find unresolved stores`
+- `delete these store ids`
+- `export the latest snapshot as HTML`
+
+Run locally:
+
+```powershell
+python -m app.mcp.server
+```
+
+## Configuration
+
+Both the web app and MCP server use the same environment variables.
+
+Required:
+
+- `GEOSERVER_URL`
+- `GEOSERVER_USER`
+- `GEOSERVER_PASSWORD`
+- `GEOSERVER_DATA_DIR`
+
+Optional:
+
+- `GEOSERVER_CATALOG_SOURCE`
+  `auto`, `filesystem`, or `rest`
+- `GEOSERVER_EXCLUDE_WORKSPACES`
+- `GEOSERVER_TIMEOUT`
+- `GEOSERVER_WORKERS`
+- `GEOSERVER_INSECURE`
+- `APP_DATABASE_PATH`
+- `APP_EXPORT_DIR`
+- `APP_PAGE_SIZE_DEFAULT`
+- `APP_PAGE_SIZE_MAX`
+- `APP_TITLE`
+
+## Docker
+
+The same image can run either runtime.
+
+Build:
+
+```powershell
+docker build -f docker/Dockerfile.app -t geoserver-cleaner .
+```
+
+Run the web app:
 
 ```powershell
 docker compose -f docker-compose.geoserver-cleaner.yml up --build
 ```
 
-The compose example is in [docker-compose.geoserver-cleaner.yml](c:\Alex\work\geoserver_cleaner\docker-compose.geoserver-cleaner.yml). It mounts:
+The compose file is:
 
-- GeoServer data directory at `/geoserver_data`
-- application database at `/app_data`
+- [docker-compose.geoserver-cleaner.yml](c:/Alex/work/geoserver_cleaner/docker-compose.geoserver-cleaner.yml)
 
-By default the example mounts the local fixture directory:
+Runtime switch:
 
-- [geoserver_test/geoserver_data](c:\Alex\work\geoserver_cleaner\geoserver_test\geoserver_data)
+- `APP_RUNTIME=web` for the FastAPI UI
+- `APP_RUNTIME=mcp` for the MCP server
 
-### Current Scope
+The image intentionally excludes the local GeoServer test fixture through [.dockerignore](c:/Alex/work/geoserver_cleaner/.dockerignore).
 
-The web app is an MVP implementation of the design review in [FASTAPI_APP_DESIGN_REVIEW.md](c:\Alex\work\geoserver_cleaner\FASTAPI_APP_DESIGN_REVIEW.md).
+## Snapshot Model
 
-Implemented now:
+The system stores inventory snapshots in SQLite and uses the latest completed snapshot as the default source for:
 
-- inventory snapshots persisted in SQLite
-- `/stores` page with server-side table queries
-- `/delete/preview` safety preview
-- `/delete/execute` background job
-- `/scan` background job
-- `/jobs/{id}` status page
+- the `/stores` page
+- report downloads
+- MCP query tools
 
-Not implemented yet:
+Each snapshot contains:
 
-- user authentication and RBAC
-- partial workspace-only refresh after delete
-- richer audit browsing UI
-- batch progress itemization per store in the job page
+- store rows
+- orphan rows
+- size and file counts
+- status and notes
+- excluded workspace context
+- GeoServer URL and data directory metadata
 
-If workspaces are excluded with `--exclude-workspaces`, or with the web app scan exclude field, stores from those workspaces are omitted from report rows and their data is not treated as orphaned.
+Orphan analysis is limited to:
 
-## GeoServer Test Fixture
+- `data_dir/data`
 
-The local Docker GeoServer fixture and its population scripts now live in [geoserver_test](c:\Alex\work\geoserver_cleaner\geoserver_test):
+## Deletion Model
 
-- [geoserver_test/docker-compose.geoserver-test.yml](c:\Alex\work\geoserver_cleaner\geoserver_test\docker-compose.geoserver-test.yml)
-- [geoserver_test/populate_geoserver_natural_earth.py](c:\Alex\work\geoserver_cleaner\geoserver_test\populate_geoserver_natural_earth.py)
-- [geoserver_test/populate_geoserver_bulk_mock.py](c:\Alex\work\geoserver_cleaner\geoserver_test\populate_geoserver_bulk_mock.py)
+Store deletion is GeoServer-managed, not filesystem-managed by this application.
 
-The GeoServer Cleaner Docker image ignores that directory through [.dockerignore](c:\Alex\work\geoserver_cleaner\.dockerignore), so fixture data and downloads are not copied into the application image build context.
+The delete preview and MCP delete tool distinguish between:
 
-It reports:
+- internal data
+  GeoServer can remove store configuration and internal data
+- external or unresolved data
+  GeoServer removes store configuration only
 
-- orphaned directories not claimed by any store
-- orphaned files not claimed by any store
-- orphaned files located inside partially referenced directories
+Not allowed:
 
-This is useful for identifying abandoned GeoTIFFs, unused mosaic folders, or residual data left behind after old stores were removed from GeoServer.
+- orphan deletion
+- direct file deletion by the app
+
+## Test Fixture
+
+A local GeoServer fixture for development and validation is kept under [geoserver_test](c:/Alex/work/geoserver_cleaner/geoserver_test).
+
+Important files:
+
+- [geoserver_test/docker-compose.geoserver-test.yml](c:/Alex/work/geoserver_cleaner/geoserver_test/docker-compose.geoserver-test.yml)
+- [geoserver_test/populate_geoserver_natural_earth.py](c:/Alex/work/geoserver_cleaner/geoserver_test/populate_geoserver_natural_earth.py)
+- [geoserver_test/populate_geoserver_bulk_mock.py](c:/Alex/work/geoserver_cleaner/geoserver_test/populate_geoserver_bulk_mock.py)
+
+This fixture is for local testing only and is not part of the cleanup-app image build context.
 
 ## Limitations
 
-- The script relies on GeoServer REST responses. If a store does not expose a usable path, it will be marked as `unresolved`.
-- If an individual store returns a bad or invalid REST response, the script logs the failure, records an `error` row when the workspace is included, and continues.
-- The logic is focused on file-based storage under the GeoServer data directory. It is not intended for database-backed stores such as PostGIS.
-- Sidecar matching is based on common naming conventions. If a deployment uses unusual file structures, counts may need review.
-- Orphan detection is based on resolved store paths. If GeoServer references data outside the expected conventions, some results may need manual validation.
+- the product is focused on file-based GeoServer stores
+- database-backed stores such as PostGIS are out of scope
+- external data locations are not scanned for orphan detection
+- deleting a store with external data does not delete that external data
+- authentication and RBAC are not implemented yet
 
-## Recommended Workflow
+## Internal Note
 
-1. Run the script and sort the CSV by `size_bytes` descending.
-2. Review the largest `store` rows first.
-3. Review all `missing`, `unresolved`, and `error` rows.
-4. Review `orphaned` rows before deleting anything.
-5. Validate suspicious results manually in GeoServer and on disk before cleanup.
-
-## Files
-
-- [geoserver_store_report.py](c:\Alex\work\geoserver_cleaner\geoserver_store_report.py)
-- [README.md](c:\Alex\work\geoserver_cleaner\README.md)
+The repository still contains the standalone inventory/report generator in [geoserver_store_report.py](c:/Alex/work/geoserver_cleaner/geoserver_store_report.py), but the primary product interfaces are the web application and the MCP server.

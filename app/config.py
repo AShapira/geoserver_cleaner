@@ -26,6 +26,7 @@ class Settings:
     timeout: int
     workers: int
     database_path: str
+    export_dir: str
     page_size_default: int
     page_size_max: int
     app_title: str
@@ -47,6 +48,9 @@ class Settings:
             workers=int(os.getenv("GEOSERVER_WORKERS", str(report.worker_default()))),
             database_path=os.path.abspath(
                 os.getenv("APP_DATABASE_PATH", os.path.join(os.getcwd(), "app_data", "geoserver_cleaner.sqlite3"))
+            ),
+            export_dir=os.path.abspath(
+                os.getenv("APP_EXPORT_DIR", os.path.join(os.getcwd(), "app_exports"))
             ),
             page_size_default=int(os.getenv("APP_PAGE_SIZE_DEFAULT", "100")),
             page_size_max=int(os.getenv("APP_PAGE_SIZE_MAX", "500")),
