@@ -46,7 +46,7 @@ Core components:
 - `Jinja2` templates
 - `HTMX` for partial page refresh and job polling
 - `SQLite` for inventory snapshots and jobs
-- `MCP` server over `stdio`
+- `MCP` server over `stdio` and optional `streamable-http`
 
 The shared backend lives under [app](c:/Alex/work/geoserver_cleaner/app).
 
@@ -100,6 +100,7 @@ The MCP server is intended for LLM and agent usage and runs against the same dat
 Transport:
 
 - `stdio`
+- optional `streamable-http` at `/mcp` when enabled in the web app
 
 Current MCP tools:
 
@@ -128,6 +129,34 @@ Run locally:
 python -m app.mcp.server
 ```
 
+Expose MCP over HTTP from the existing web app:
+
+```powershell
+$env:APP_ENABLE_MCP_HTTP="true"
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+The HTTP MCP endpoint is then:
+
+```text
+http://localhost:8000/mcp
+```
+
+This endpoint is intended for trusted internal networks or a reverse proxy. v1 does not add app-level authentication.
+
+VS Code workspace `mcp.json` example:
+
+```json
+{
+  "servers": {
+    "geoServerCleaner": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
+```
+
 ## Configuration
 
 Both the web app and MCP server use the same environment variables.
@@ -152,6 +181,8 @@ Optional:
 - `APP_PAGE_SIZE_DEFAULT`
 - `APP_PAGE_SIZE_MAX`
 - `APP_TITLE`
+- `APP_ENABLE_MCP_HTTP`
+- `APP_MCP_HTTP_PATH`
 
 ## Docker
 
@@ -169,6 +200,12 @@ Run the web app:
 docker compose -f docker-compose.geoserver-cleaner.yml up --build
 ```
 
+The provided compose file enables HTTP MCP on the same port as the web app:
+
+```text
+http://localhost:8000/mcp
+```
+
 The compose file is:
 
 - [docker-compose.geoserver-cleaner.yml](c:/Alex/work/geoserver_cleaner/docker-compose.geoserver-cleaner.yml)
@@ -176,7 +213,7 @@ The compose file is:
 Runtime switch:
 
 - `APP_RUNTIME=web` for the FastAPI UI
-- `APP_RUNTIME=mcp` for the MCP server
+- `APP_RUNTIME=mcp` for the stdio MCP server
 
 The image intentionally excludes the local GeoServer test fixture through [.dockerignore](c:/Alex/work/geoserver_cleaner/.dockerignore).
 

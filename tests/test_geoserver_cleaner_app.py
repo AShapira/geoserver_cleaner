@@ -35,7 +35,7 @@ class DummyClient:
 
 
 class GeoServerCleanerAppTests(unittest.TestCase):
-    def load_app(self, temp_dir: str):
+    def load_app(self, temp_dir: str, extra_env: dict[str, str] | None = None):
         env_updates = {
             "APP_DATABASE_PATH": os.path.join(temp_dir, "geoserver_cleaner.sqlite3"),
             "GEOSERVER_DATA_DIR": temp_dir,
@@ -43,10 +43,13 @@ class GeoServerCleanerAppTests(unittest.TestCase):
             "GEOSERVER_USER": "admin",
             "GEOSERVER_PASSWORD": "secret",
         }
+        if extra_env:
+            env_updates.update(extra_env)
         patcher = patch.dict(os.environ, env_updates, clear=False)
         patcher.start()
         self.addCleanup(patcher.stop)
 
+        sys.modules.pop("app.mcp.server", None)
         sys.modules.pop("app.main", None)
         module = importlib.import_module("app.main")
         return module
@@ -115,6 +118,23 @@ class GeoServerCleanerAppTests(unittest.TestCase):
                 self.assertLess(type_index, size_index)
                 self.assertLess(size_index, files_index)
                 self.assertLess(files_index, status_index)
+
+    def test_mcp_http_path_is_disabled_by_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            module = self.load_app(temp_dir)
+            with TestClient(module.app) as client:
+                response = client.get("/mcp", follow_redirects=False)
+                self.assertEqual(response.status_code, 404)
+
+    def test_mcp_http_path_is_mounted_exactly_once_when_enabled(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            module = self.load_app(temp_dir, {"APP_ENABLE_MCP_HTTP": "true"})
+            with TestClient(module.app) as client:
+                root_response = client.get("/mcp", follow_redirects=False)
+                nested_response = client.get("/mcp/mcp", follow_redirects=False)
+                self.assertEqual(root_response.status_code, 307)
+                self.assertEqual(root_response.headers["location"], "http://testserver/mcp/")
+                self.assertEqual(nested_response.status_code, 404)
 
     def test_stores_table_filters_by_workspace(self):
         with tempfile.TemporaryDirectory() as temp_dir:

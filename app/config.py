@@ -14,6 +14,16 @@ def _bool_env(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _normalized_http_path(value: str) -> str:
+    raw = value.strip()
+    if not raw:
+        raise ValueError("APP_MCP_HTTP_PATH must not be empty.")
+    parts = [segment for segment in raw.split("/") if segment]
+    if not parts:
+        raise ValueError("APP_MCP_HTTP_PATH must not resolve to the root path.")
+    return "/" + "/".join(parts)
+
+
 @dataclass(frozen=True)
 class Settings:
     geoserver_url: str
@@ -30,6 +40,8 @@ class Settings:
     page_size_default: int
     page_size_max: int
     app_title: str
+    enable_mcp_http: bool
+    mcp_http_path: str
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -55,6 +67,8 @@ class Settings:
             page_size_default=int(os.getenv("APP_PAGE_SIZE_DEFAULT", "100")),
             page_size_max=int(os.getenv("APP_PAGE_SIZE_MAX", "500")),
             app_title=os.getenv("APP_TITLE", "GeoServer Cleaner"),
+            enable_mcp_http=_bool_env("APP_ENABLE_MCP_HTTP", False),
+            mcp_http_path=_normalized_http_path(os.getenv("APP_MCP_HTTP_PATH", "/mcp")),
         )
 
     @property
