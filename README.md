@@ -194,6 +194,24 @@ Build:
 docker build -f docker/Dockerfile.app -t geoserver-cleaner .
 ```
 
+Local security scan:
+
+```powershell
+.\scripts\test-security.ps1
+```
+
+The script:
+
+- builds the app image
+- shows a Docker Scout quick overview
+- fails if fixable `critical` or `high` vulnerabilities are found
+
+If the image is already built:
+
+```powershell
+.\scripts\test-security.ps1 -SkipBuild -ImageTag geoserver-cleaner:security
+```
+
 Run the web app:
 
 ```powershell
@@ -216,6 +234,25 @@ Runtime switch:
 - `APP_RUNTIME=mcp` for the stdio MCP server
 
 The image intentionally excludes the local GeoServer test fixture through [.dockerignore](c:/Alex/work/geoserver_cleaner/.dockerignore).
+
+## Security Scanning
+
+Recommended local checks:
+
+```powershell
+python -m pip install pip-audit
+pip-audit -r requirements.txt
+.\scripts\test-security.ps1
+```
+
+Recommended CI checks:
+
+- Python dependency audit with `pip-audit`
+- Docker image scan with Docker Scout
+
+The repository workflow for image scanning is:
+
+- [.github/workflows/security.yml](c:/Alex/work/geoserver_cleaner/.github/workflows/security.yml)
 
 ## Snapshot Model
 

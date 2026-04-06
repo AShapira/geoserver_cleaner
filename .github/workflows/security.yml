@@ -1,0 +1,64 @@
+name: Security
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python-audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install pip-audit
+        run: python -m pip install pip-audit
+
+      - name: Audit Python dependencies
+        run: pip-audit -r requirements.txt
+
+  image-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build local image for scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.app
+          load: true
+          tags: geoserver-cleaner:security-ci
+
+      - name: Docker Scout quickview
+        uses: docker/scout-action@v1
+        with:
+          command: quickview
+          image: local://geoserver-cleaner:security-ci
+          summary: true
+          write-comment: false
+
+      - name: Docker Scout CVE scan
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: local://geoserver-cleaner:security-ci
+          only-severities: critical,high
+          only-fixed: true
+          exit-code: true
+          summary: true
+          write-comment: false
