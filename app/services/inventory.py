@@ -7,20 +7,29 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from typing import Callable, List, Optional, Set
 
-import geoserver_store_report as report
-
 from app import db
 from app.config import Settings
+from app.reporting.core import (
+    CatalogStore,
+    GeoServerClient,
+    build_error_row,
+    collect_orphans,
+    collect_rest_catalog,
+    list_catalog_workspaces,
+    normalize_path,
+    process_catalog_store,
+    worker_default,
+)
 
 
 LOGGER = logging.getLogger("geoserver_cleaner.inventory")
 ProgressCallback = Callable[[dict, str], None]
 
 
-def create_client(settings: Settings) -> Optional[report.GeoServerClient]:
+def create_client(settings: Settings) -> Optional[GeoServerClient]:
     if not settings.geoserver_url:
         return None
-    return report.GeoServerClient(
+    return GeoServerClient(
         base_url=settings.geoserver_url,
         username=settings.geoserver_username,
         password=settings.geoserver_password,
@@ -90,7 +99,7 @@ def collect_inventory_rows(
 
     if catalog_source in {"auto", "filesystem"}:
         try:
-            workspace_names, catalog_stores = report.list_catalog_workspaces(
+            workspace_names, catalog_stores = list_catalog_workspaces(
                 data_dir,
                 progress_callback=on_discovery_progress,
             )
@@ -104,13 +113,13 @@ def collect_inventory_rows(
             if catalog_source == "filesystem":
                 raise
             LOGGER.warning("Filesystem catalog discovery failed, falling back to REST: %s", exc)
-            workspace_names, catalog_stores, rest_error_rows = report.collect_rest_catalog(
+            workspace_names, catalog_stores, rest_error_rows = collect_rest_catalog(
                 client,
                 data_dir,
                 progress_callback=on_discovery_progress,
             )
     else:
-        workspace_names, catalog_stores, rest_error_rows = report.collect_rest_catalog(
+        workspace_names, catalog_stores, rest_error_rows = collect_rest_catalog(
             client,
             data_dir,
             progress_callback=on_discovery_progress,
@@ -121,7 +130,7 @@ def collect_inventory_rows(
         if workspace.lower() in excluded_workspaces:
             fallback_root = os.path.join(data_dir, "data", workspace)
             if os.path.isdir(fallback_root):
-                referenced_roots.append(report.normalize_path(fallback_root))
+                referenced_roots.append(normalize_path(fallback_root))
 
     included_stores = [
         item for item in catalog_stores if item.workspace.lower() not in excluded_workspaces
@@ -139,9 +148,9 @@ def collect_inventory_rows(
             },
             "Scanning stores 0/{}".format(total_stores),
         )
-    with ThreadPoolExecutor(max_workers=settings.workers or report.worker_default()) as executor:
+    with ThreadPoolExecutor(max_workers=settings.workers or worker_default()) as executor:
         future_map = {
-            executor.submit(report.process_catalog_store, catalog_store, data_dir): catalog_store
+            executor.submit(process_catalog_store, catalog_store, data_dir): catalog_store
             for catalog_store in included_stores
         }
         completed = 0
@@ -151,7 +160,7 @@ def collect_inventory_rows(
             try:
                 processed = future.result()
             except Exception as exc:
-                row = report.build_error_row(
+                row = build_error_row(
                     workspace=catalog_store.workspace,
                     store_name=catalog_store.store_name,
                     status="error",
@@ -165,7 +174,7 @@ def collect_inventory_rows(
                 if processed.referenced_files:
                     referenced_files.update(processed.referenced_files)
             row["store_kind"] = catalog_store.store_kind or infer_store_kind(row.get("store_type", ""))
-            row["normalized_path"] = report.normalize_path(row.get("resolved_path", "")) if row.get("resolved_path") else ""
+            row["normalized_path"] = normalize_path(row.get("resolved_path", "")) if row.get("resolved_path") else ""
             rows.append(row)
             completed += 1
             if progress_callback is not None and (
@@ -200,10 +209,10 @@ def collect_inventory_rows(
             "Calculating orphaned data",
         )
 
-    for orphan_row in report.collect_orphans(data_root, referenced_roots, referenced_files):
+    for orphan_row in collect_orphans(data_root, referenced_roots, referenced_files):
         orphan_row["store_kind"] = ""
         orphan_row["normalized_path"] = (
-            report.normalize_path(orphan_row.get("resolved_path", "")) if orphan_row.get("resolved_path") else ""
+            normalize_path(orphan_row.get("resolved_path", "")) if orphan_row.get("resolved_path") else ""
         )
         rows.append(orphan_row)
 

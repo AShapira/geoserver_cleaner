@@ -4,10 +4,10 @@ import os
 from collections import defaultdict
 from typing import Dict, List, Optional, Sequence, Tuple
 
-import geoserver_store_report as report
-
 from app import db
 from app.config import Settings
+from app.reporting.core import parse_excluded_workspaces
+from app.reporting.render import build_csv_bytes, build_html_report_text
 from app.services import deletion
 
 
@@ -47,7 +47,7 @@ def get_snapshot_metadata(db_path: str, run_id: Optional[int] = None) -> Dict[st
         "started_at": str(run["started_at"] or ""),
         "finished_at": str(run["finished_at"] or ""),
         "catalog_source": str(run["catalog_source"] or ""),
-        "excluded_workspaces": sorted(report.parse_excluded_workspaces(str(run["excluded_workspaces"] or ""))),
+        "excluded_workspaces": sorted(parse_excluded_workspaces(str(run["excluded_workspaces"] or ""))),
         "geoserver_url": str(run["geoserver_url"] or ""),
         "data_dir": str(run["data_dir"] or ""),
         "store_count": int(run["store_count"] or 0),
@@ -350,7 +350,7 @@ def resolve_store_selection(
 
 def build_snapshot_csv_bytes(db_path: str, *, run_id: Optional[int] = None) -> Tuple[Dict[str, object], bytes]:
     metadata, rows = get_run_rows_dicts(db_path, run_id)
-    return metadata, report.build_csv_bytes(rows)
+    return metadata, build_csv_bytes(rows)
 
 
 def build_snapshot_html_text(
@@ -362,7 +362,7 @@ def build_snapshot_html_text(
     metadata, rows = get_run_rows_dicts(db_path, run_id)
     return (
         metadata,
-        report.build_html_report_text(
+        build_html_report_text(
             rows,
             list(metadata["excluded_workspaces"]),
             str(metadata["geoserver_url"] or settings.geoserver_url),
@@ -381,12 +381,12 @@ def write_snapshot_export(
     os.makedirs(settings.export_dir, exist_ok=True)
     if format_name == "csv":
         metadata, content = build_snapshot_csv_bytes(db_path, run_id=run_id)
-        path = os.path.join(settings.export_dir, "geoserver_store_report_snapshot_{}.{}".format(int(metadata["run_id"]), "csv"))
+        path = os.path.join(settings.export_dir, "geoserver_cleaner_snapshot_{}.{}".format(int(metadata["run_id"]), "csv"))
         with open(path, "wb") as handle:
             handle.write(content)
     elif format_name == "html":
         metadata, content = build_snapshot_html_text(db_path, settings, run_id=run_id)
-        path = os.path.join(settings.export_dir, "geoserver_store_report_snapshot_{}.{}".format(int(metadata["run_id"]), "html"))
+        path = os.path.join(settings.export_dir, "geoserver_cleaner_snapshot_{}.{}".format(int(metadata["run_id"]), "html"))
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(content)
     else:

@@ -90,7 +90,7 @@ def latest_run_or_404(settings: Settings) -> object:
 
 
 def build_report_filename(run_id: int, suffix: str) -> str:
-    return "geoserver_store_report_snapshot_{}.{}".format(run_id, suffix)
+    return "geoserver_cleaner_snapshot_{}.{}".format(run_id, suffix)
 
 
 def build_table_state(request: Request, run_id: int) -> Dict[str, object]:

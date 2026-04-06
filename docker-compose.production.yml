@@ -1,0 +1,31 @@
+services:
+  geoserver-cleaner:
+    image: ghcr.io/ashapira/geoserver-cleaner:${GEOSERVER_CLEANER_TAG:-2.3.0}
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      GEOSERVER_URL: ${GEOSERVER_URL}
+      GEOSERVER_USER: ${GEOSERVER_USER}
+      GEOSERVER_PASSWORD: ${GEOSERVER_PASSWORD}
+      GEOSERVER_DATA_DIR: /geoserver_data
+      GEOSERVER_CATALOG_SOURCE: ${GEOSERVER_CATALOG_SOURCE:-filesystem}
+      GEOSERVER_EXCLUDE_WORKSPACES: ${GEOSERVER_EXCLUDE_WORKSPACES:-}
+      GEOSERVER_TIMEOUT: ${GEOSERVER_TIMEOUT:-60}
+      GEOSERVER_WORKERS: ${GEOSERVER_WORKERS:-8}
+      GEOSERVER_INSECURE: ${GEOSERVER_INSECURE:-false}
+      APP_DATABASE_PATH: /app_data/geoserver_cleaner.sqlite3
+      APP_EXPORT_DIR: /app_exports
+      APP_PAGE_SIZE_DEFAULT: ${APP_PAGE_SIZE_DEFAULT:-100}
+      APP_PAGE_SIZE_MAX: ${APP_PAGE_SIZE_MAX:-500}
+      APP_TITLE: ${APP_TITLE:-GeoServer Cleaner}
+      APP_ENABLE_MCP_HTTP: ${APP_ENABLE_MCP_HTTP:-true}
+      APP_MCP_HTTP_PATH: ${APP_MCP_HTTP_PATH:-/mcp}
+    volumes:
+      - ${GEOSERVER_DATA_DIR_HOST}:/geoserver_data
+      - geoserver-cleaner-app-data:/app_data
+      - geoserver-cleaner-exports:/app_exports
+
+volumes:
+  geoserver-cleaner-app-data:
+  geoserver-cleaner-exports:

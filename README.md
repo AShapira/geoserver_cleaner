@@ -129,6 +129,12 @@ Run locally:
 python -m app.mcp.server
 ```
 
+Standalone report CLI:
+
+```powershell
+python -m app.reporting.cli --data-dir <path-to-geoserver-data-dir>
+```
+
 Expose MCP over HTTP from the existing web app:
 
 ```powershell
@@ -228,6 +234,28 @@ The compose file is:
 
 - [docker-compose.geoserver-cleaner.yml](c:/Alex/work/geoserver_cleaner/docker-compose.geoserver-cleaner.yml)
 
+Production compose:
+
+- [docker-compose.production.yml](c:/Alex/work/geoserver_cleaner/docker-compose.production.yml)
+
+This file pulls the published GitHub Container Registry image instead of building locally.
+
+Run production compose:
+
+```powershell
+$env:GEOSERVER_URL="http://your-geoserver-host/geoserver"
+$env:GEOSERVER_USER="admin"
+$env:GEOSERVER_PASSWORD="secret"
+$env:GEOSERVER_DATA_DIR_HOST="C:\path\to\geoserver_data"
+docker compose -f docker-compose.production.yml up -d
+```
+
+Notes:
+
+- the default image tag is the latest tagged release currently in this repo: `2.3.0`
+- override it with `GEOSERVER_CLEANER_TAG` when a newer release is published
+- if the package is private, run `docker login ghcr.io` before `docker compose up`
+
 Runtime switch:
 
 - `APP_RUNTIME=web` for the FastAPI UI
@@ -313,4 +341,4 @@ This fixture is for local testing only and is not part of the cleanup-app image 
 
 ## Internal Note
 
-The repository still contains the standalone inventory/report generator in [geoserver_store_report.py](c:/Alex/work/geoserver_cleaner/geoserver_store_report.py), but the primary product interfaces are the web application and the MCP server.
+The standalone inventory/report generator now lives under [app/reporting/cli.py](c:/Alex/work/geoserver_cleaner/app/reporting/cli.py). The primary product interfaces remain the web application and the MCP server.

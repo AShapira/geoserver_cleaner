@@ -508,6 +508,7 @@ class GeoServerCleanerAppTests(unittest.TestCase):
                 response = client.get("/reports/latest.csv")
                 self.assertEqual(response.status_code, 200)
                 self.assertIn("attachment; filename=", response.headers["content-disposition"])
+                self.assertIn("geoserver_cleaner_snapshot_", response.headers["content-disposition"])
                 text = response.content.decode("utf-8-sig")
                 self.assertIn("workspace,store_name", text)
                 self.assertIn("demo", text)
@@ -522,7 +523,8 @@ class GeoServerCleanerAppTests(unittest.TestCase):
                 response = client.get("/reports/latest.html")
                 self.assertEqual(response.status_code, 200)
                 self.assertIn("attachment; filename=", response.headers["content-disposition"])
-                self.assertIn("GeoServer Store Report", response.text)
+                self.assertIn("geoserver_cleaner_snapshot_", response.headers["content-disposition"])
+                self.assertIn("GeoServer Cleaner Report", response.text)
                 self.assertIn("demo", response.text)
 
     def test_geoserver_delete_uses_recurse_and_purge_all(self):
@@ -530,7 +532,7 @@ class GeoServerCleanerAppTests(unittest.TestCase):
             module = self.load_app(temp_dir)
             dummy_client = DummyClient("http://example.test/geoserver/", module.SETTINGS.timeout)
             with patch.object(
-                module.deletion.geoserver.report,
+                module.deletion.geoserver,
                 "GeoServerClient",
                 return_value=dummy_client,
             ):

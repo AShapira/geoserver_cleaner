@@ -281,10 +281,12 @@ class GeoServerCleanerMcpTests(unittest.TestCase):
             self.assertTrue(os.path.isfile(html_payload["path"]))
             self.assertEqual(csv_payload["format"], "csv")
             self.assertEqual(html_payload["format"], "html")
+            self.assertIn("geoserver_cleaner_snapshot_", os.path.basename(csv_payload["path"]))
+            self.assertIn("geoserver_cleaner_snapshot_", os.path.basename(html_payload["path"]))
             with open(csv_payload["path"], "r", encoding="utf-8-sig") as handle:
                 self.assertIn("workspace,store_name", handle.read())
             with open(html_payload["path"], "r", encoding="utf-8") as handle:
-                self.assertIn("GeoServer Store Report", handle.read())
+                self.assertIn("GeoServer Cleaner Report", handle.read())
 
     def test_streamable_http_server_matches_stdio_tooling(self):
         with tempfile.TemporaryDirectory() as temp_dir:

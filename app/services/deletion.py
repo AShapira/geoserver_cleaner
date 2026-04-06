@@ -3,10 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence
 
-import geoserver_store_report as report
-
 from app import db
 from app.config import Settings
+from app.reporting.core import normalize_path, path_under_any_root
 from app.services import geoserver
 
 ProgressCallback = Callable[[dict, str], None]
@@ -59,7 +58,7 @@ def build_delete_preview(
     items: List[DeletePlanItem] = []
     delete_paths: List[str] = []
     warnings: List[str] = []
-    internal_root = report.normalize_path(settings.data_dir)
+    internal_root = normalize_path(settings.data_dir)
 
     for row in ordered_rows:
         reason_parts: List[str] = []
@@ -86,7 +85,7 @@ def build_delete_preview(
             elif path_kind == "missing":
                 data_scope = "missing"
                 reason_parts.append("GeoServer will delete store configuration only; path is unresolved or missing.")
-            elif not report.path_under_any_root(normalized_path, [internal_root]):
+            elif not path_under_any_root(normalized_path, [internal_root]):
                 data_scope = "external"
                 reason_parts.append("GeoServer will delete store configuration only; data is outside data_dir.")
             else:

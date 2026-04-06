@@ -4,13 +4,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urljoin
 from urllib.request import Request
 
-import geoserver_store_report as report
-
 from app.config import Settings
+from app.reporting.core import GeoServerClient
 
 
 def delete_store(settings: Settings, workspace: str, store_kind: str, store_name: str) -> None:
-    client = report.GeoServerClient(
+    client = GeoServerClient(
         base_url=settings.geoserver_url,
         username=settings.geoserver_username,
         password=settings.geoserver_password,

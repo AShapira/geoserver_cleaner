@@ -17,8 +17,8 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Compile reporting script
-        run: python -m py_compile geoserver_store_report.py
+      - name: Compile reporting modules
+        run: python -m py_compile app/reporting/core.py app/reporting/render.py app/reporting/cli.py
 
       - name: Compile population script
         run: python -m py_compile geoserver_test/populate_geoserver_natural_earth.py

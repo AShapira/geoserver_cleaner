@@ -1,9 +1,13 @@
+import contextlib
+import io
 import os
 import tempfile
 import unittest
 from unittest.mock import patch
 
-import geoserver_store_report as report
+from app.reporting import cli as report_cli
+from app.reporting import core as report
+from app.reporting import render as report_render
 
 
 class GeoServerStoreReportTests(unittest.TestCase):
@@ -193,7 +197,7 @@ class GeoServerStoreReportTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as temp_dir:
             output_html = os.path.join(temp_dir, "report.html")
-            report.write_html_report(
+            report_render.write_html_report(
                 output_html,
                 rows,
                 ["skip_me"],
@@ -203,13 +207,60 @@ class GeoServerStoreReportTests(unittest.TestCase):
             with open(output_html, "r", encoding="utf-8") as handle:
                 html_text = handle.read()
 
-        self.assertIn("GeoServer Store Report", html_text)
+        self.assertIn("GeoServer Cleaner Report", html_text)
         self.assertIn('id="reportTable"', html_text)
         self.assertIn('class="sortable"', html_text)
         self.assertIn('id="pageSize"', html_text)
         self.assertIn('id="reportRows"', html_text)
         self.assertIn("<tbody></tbody>", html_text)
         self.assertIn("skip_me", html_text)
+
+    def test_reporting_cli_uses_app_native_default_output_name(self):
+        args = report_cli.parse_args([])
+        self.assertTrue(args.output_csv.endswith("geoserver_cleaner_report.csv"))
+
+    def test_reporting_cli_generates_csv_html_and_summary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = os.path.join(temp_dir, "data")
+            workspaces_root = os.path.join(temp_dir, "workspaces")
+            raster_dir = os.path.join(data_root, "fast_ws", "raster")
+            store_dir = os.path.join(workspaces_root, "fast_ws", "fast_store")
+            coverage_dir = os.path.join(store_dir, "fast_store")
+            os.makedirs(raster_dir, exist_ok=True)
+            os.makedirs(coverage_dir, exist_ok=True)
+
+            tif_path = os.path.join(raster_dir, "fast_store.tif")
+            with open(tif_path, "wb") as handle:
+                handle.write(b"mock")
+
+            with open(os.path.join(workspaces_root, "fast_ws", "workspace.xml"), "w", encoding="utf-8") as handle:
+                handle.write("<workspace><name>fast_ws</name></workspace>")
+            with open(os.path.join(store_dir, "coveragestore.xml"), "w", encoding="utf-8") as handle:
+                handle.write(
+                    "<coverageStore><name>fast_store</name><type>GeoTIFF</type>"
+                    "<url>file:data/fast_ws/raster/fast_store.tif</url></coverageStore>"
+                )
+            with open(os.path.join(coverage_dir, "coverage.xml"), "w", encoding="utf-8") as handle:
+                handle.write("<coverage><name>fast_layer</name></coverage>")
+
+            output_csv = os.path.join(temp_dir, "geoserver_cleaner_report.csv")
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                exit_code = report_cli.main(
+                    [
+                        "--data-dir",
+                        temp_dir,
+                        "--catalog-source",
+                        "filesystem",
+                        "--output-csv",
+                        output_csv,
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Wrote 1 store rows and 0 orphan rows", buffer.getvalue())
+            self.assertTrue(os.path.isfile(output_csv))
+            self.assertTrue(os.path.isfile(os.path.join(temp_dir, "geoserver_cleaner_report.html")))
 
 
 if __name__ == "__main__":

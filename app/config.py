@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import List
 
-import geoserver_store_report as report
+from app.reporting.core import parse_excluded_workspaces, worker_default
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
@@ -57,7 +57,7 @@ class Settings:
             excluded_workspaces_raw=os.getenv("GEOSERVER_EXCLUDE_WORKSPACES", ""),
             insecure=_bool_env("GEOSERVER_INSECURE", False),
             timeout=int(os.getenv("GEOSERVER_TIMEOUT", "60")),
-            workers=int(os.getenv("GEOSERVER_WORKERS", str(report.worker_default()))),
+            workers=int(os.getenv("GEOSERVER_WORKERS", str(worker_default()))),
             database_path=os.path.abspath(
                 os.getenv("APP_DATABASE_PATH", os.path.join(os.getcwd(), "app_data", "geoserver_cleaner.sqlite3"))
             ),
@@ -73,4 +73,4 @@ class Settings:
 
     @property
     def excluded_workspaces(self) -> List[str]:
-        return sorted(report.parse_excluded_workspaces(self.excluded_workspaces_raw))
+        return sorted(parse_excluded_workspaces(self.excluded_workspaces_raw))
