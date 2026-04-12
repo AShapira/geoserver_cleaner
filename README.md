@@ -256,6 +256,29 @@ Notes:
 - override it with `GEOSERVER_CLEANER_TAG` when a newer release is published
 - if the package is private, run `docker login ghcr.io` before `docker compose up`
 
+Local production flow against the repo test fixture:
+
+- use [`.env.production.local`](c:/Alex/work/geoserver_cleaner/.env.production.local) for a local `2.4.0` image run wired to [geoserver_test/geoserver_data](c:/Alex/work/geoserver_cleaner/geoserver_test/geoserver_data)
+- start both the GeoServer fixture and the production app with [`scripts/run-local-production.ps1`](c:/Alex/work/geoserver_cleaner/scripts/run-local-production.ps1)
+
+```powershell
+.\scripts\run-local-production.ps1
+```
+
+Stop it with:
+
+```powershell
+.\scripts\run-local-production.ps1 -Down
+```
+
+This starts:
+
+- GeoServer test fixture on `http://127.0.0.1:8081/geoserver`
+- GeoServer Cleaner UI on `http://127.0.0.1:8000/stores`
+- HTTP MCP endpoint on `http://127.0.0.1:8000/mcp/`
+
+VS Code workspace MCP config for that flow lives in [`.vscode/mcp.json`](c:/Alex/work/geoserver_cleaner/.vscode/mcp.json).
+
 Runtime switch:
 
 - `APP_RUNTIME=web` for the FastAPI UI

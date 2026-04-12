@@ -12,6 +12,7 @@ reports/*.csv
 reports/*.html
 
 .env
+.env.production.local
 .venv/
 venv/
 app_data/
