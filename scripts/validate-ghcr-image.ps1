@@ -58,10 +58,18 @@ function Invoke-CapturedCommand {
         $display = ($FilePath + " " + [string]::Join(" ", $ArgumentList)).Trim()
     }
     Write-Host ">> $display"
-    $output = & $FilePath @ArgumentList 2>&1
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = & $FilePath @ArgumentList 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     $text = ($output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
     Add-CommandLog -Command $display -Output $text
-    if ($LASTEXITCODE -ne 0) {
+    if ($exitCode -ne 0) {
         throw "Command failed: $display"
     }
     return $text
@@ -147,16 +155,23 @@ function Get-ComposeContainerId {
 function Get-PublishRunSummary {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$CommitSha
+        [string]$CommitSha,
+        [string]$RefName
     )
 
     try {
         Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
-        $json = & gh run list --workflow publish-geoserver-cleaner.yml --limit 20 --json databaseId,displayTitle,event,headSha,status,conclusion,url 2>$null
+        $json = & gh run list --workflow publish-geoserver-cleaner.yml --limit 20 --json databaseId,displayTitle,event,headSha,headBranch,status,conclusion,url 2>$null
         if ($LASTEXITCODE -ne 0 -or -not $json) {
             return $null
         }
         $runs = $json | ConvertFrom-Json
+        if ($RefName) {
+            $preferred = $runs | Where-Object { $_.headSha -eq $CommitSha -and $_.headBranch -eq $RefName } | Select-Object -First 1
+            if ($preferred) {
+                return $preferred
+            }
+        }
         return $runs | Where-Object { $_.headSha -eq $CommitSha } | Select-Object -First 1
     }
     catch {
@@ -185,7 +200,7 @@ try {
     $validationStartedAt = Get-Date
     $gitHead = (Invoke-CapturedCommand -FilePath "git" -ArgumentList @("rev-parse", "HEAD") -DisplayCommand "git rev-parse HEAD").Trim()
     $tagSha = (Invoke-CapturedCommand -FilePath "git" -ArgumentList @("rev-list", "-n", "1", $ImageTag) -DisplayCommand "git rev-list -n 1 $ImageTag").Trim()
-    $publishRun = Get-PublishRunSummary -CommitSha $tagSha
+    $publishRun = Get-PublishRunSummary -CommitSha $tagSha -RefName $ImageTag
 
     Invoke-CapturedCommand -FilePath "python" -ArgumentList @("-m", "unittest", "discover", "-s", "tests", "-v") -DisplayCommand "python -m unittest discover -s tests -v" | Out-Null
     Invoke-CapturedCommand -FilePath "docker" -ArgumentList @("compose", "-f", $testCompose, "config") -DisplayCommand "docker compose -f geoserver_test/docker-compose.geoserver-test.yml config" | Out-Null
@@ -237,7 +252,7 @@ try {
 
     $logLines = $appLogsText -split "`r?`n"
     foreach ($line in $logLines) {
-        if ($line -match "runtime_init_start|runtime_init_complete|mcp_http_enabled|http_request_complete|inventory_scan_complete|mcp_http_build|web_app_create") {
+        if ($line -match "Starting runtime entrypoint|Database initialized|Application runtime initialized|Creating FastAPI application|Configured MCP streamable HTTP app|MCP HTTP enabled|Uvicorn running|Inventory scan completed|CSV export requested") {
             $logSummary.Add($line)
         }
     }
