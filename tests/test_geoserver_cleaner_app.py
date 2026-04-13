@@ -1,4 +1,6 @@
 import importlib
+import json
+import logging
 import os
 import sys
 import tempfile
@@ -35,19 +37,36 @@ class DummyClient:
 
 
 class GeoServerCleanerAppTests(unittest.TestCase):
+    def close_logs(self):
+        try:
+            from app.logging_utils import shutdown_app_logging
+
+            shutdown_app_logging()
+        except Exception:
+            logging.shutdown()
+
+    def flush_logs(self):
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+
     def load_app(self, temp_dir: str, extra_env: dict[str, str] | None = None):
+        log_fd, log_path = tempfile.mkstemp(prefix="geoserver_cleaner_test_", suffix=".log")
+        os.close(log_fd)
+        os.unlink(log_path)
         env_updates = {
             "APP_DATABASE_PATH": os.path.join(temp_dir, "geoserver_cleaner.sqlite3"),
             "GEOSERVER_DATA_DIR": temp_dir,
             "GEOSERVER_URL": "http://example.test/geoserver",
             "GEOSERVER_USER": "admin",
             "GEOSERVER_PASSWORD": "secret",
+            "APP_LOG_PATH": log_path,
         }
         if extra_env:
             env_updates.update(extra_env)
         patcher = patch.dict(os.environ, env_updates, clear=False)
         patcher.start()
         self.addCleanup(patcher.stop)
+        self.addCleanup(self.close_logs)
 
         sys.modules.pop("app.mcp.server", None)
         sys.modules.pop("app.main", None)
@@ -135,6 +154,60 @@ class GeoServerCleanerAppTests(unittest.TestCase):
                 self.assertEqual(root_response.status_code, 307)
                 self.assertEqual(root_response.headers["location"], "http://testserver/mcp/")
                 self.assertEqual(nested_response.status_code, 404)
+
+    def test_settings_include_logging_defaults(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            from app.config import Settings
+
+            env_updates = {
+                "APP_DATABASE_PATH": os.path.join(temp_dir, "geoserver_cleaner.sqlite3"),
+                "GEOSERVER_DATA_DIR": temp_dir,
+                "GEOSERVER_URL": "http://example.test/geoserver",
+                "GEOSERVER_USER": "admin",
+                "GEOSERVER_PASSWORD": "secret",
+            }
+            with patch.dict(os.environ, env_updates, clear=True):
+                settings = Settings.from_env()
+            self.assertEqual(settings.app_log_level, "INFO")
+            self.assertEqual(settings.app_log_max_bytes, 10 * 1024 * 1024)
+            self.assertEqual(settings.app_log_backup_count, 5)
+            self.assertTrue(settings.app_log_path.startswith(temp_dir))
+            self.assertTrue(settings.app_log_path.endswith(os.path.join("logs", "geoserver_cleaner.log")))
+
+    def test_http_requests_are_logged_to_json_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = os.path.join(temp_dir, "logs", "test.log")
+            module = self.load_app(
+                temp_dir,
+                {
+                    "APP_LOG_LEVEL": "DEBUG",
+                    "APP_LOG_PATH": log_path,
+                },
+            )
+            with TestClient(module.app) as client:
+                response = client.get("/stores")
+                self.assertEqual(response.status_code, 200)
+            self.flush_logs()
+            self.close_logs()
+            with open(log_path, "r", encoding="utf-8") as handle:
+                payloads = [json.loads(line) for line in handle if line.strip()]
+            self.assertTrue(any(item["message"] == "Initializing application runtime" for item in payloads))
+            self.assertTrue(
+                any(
+                    item["message"] == "HTTP request started"
+                    and item.get("path") == "/stores"
+                    and item.get("method") == "GET"
+                    for item in payloads
+                )
+            )
+            self.assertTrue(
+                any(
+                    item["message"] == "HTTP request completed"
+                    and item.get("path") == "/stores"
+                    and item.get("status_code") == 200
+                    for item in payloads
+                )
+            )
 
     def test_stores_table_filters_by_workspace(self):
         with tempfile.TemporaryDirectory() as temp_dir:

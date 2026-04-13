@@ -3,6 +3,7 @@ import logging
 from mcp.server.fastmcp import FastMCP
 
 from app import db
+from app.config import Settings
 from app.runtime import AppRuntime, build_runtime
 from app.services import job_status, snapshots
 
@@ -17,6 +18,30 @@ class GeoServerCleanerMcpService:
     @property
     def settings(self):
         return self.runtime.settings
+
+    def _log_tool_request(self, tool_name: str, **fields) -> None:
+        LOGGER.info(
+            "MCP tool request started",
+            extra={"event": "mcp_tool_start", "tool_name": tool_name, **fields},
+        )
+
+    def _log_tool_complete(self, tool_name: str, result: dict | None = None, **fields) -> None:
+        summary = {}
+        payload = result or {}
+        if "job_id" in payload:
+            summary["job_id"] = payload.get("job_id")
+        if "run_id" in payload:
+            summary["run_id"] = payload.get("run_id")
+        if "row_count" in payload:
+            summary["row_count"] = payload.get("row_count")
+        if "filename" in payload:
+            summary["export_filename"] = payload.get("filename")
+        if "path" in payload:
+            summary["path"] = payload.get("path")
+        LOGGER.info(
+            "MCP tool request completed",
+            extra={"event": "mcp_tool_complete", "tool_name": tool_name, **fields, **summary},
+        )
 
     def _job_payload(self, job_id: int) -> dict:
         job = db.get_job(self.settings.database_path, job_id)
@@ -33,9 +58,14 @@ class GeoServerCleanerMcpService:
         }
 
     def get_latest_snapshot(self) -> dict:
-        return snapshots.get_snapshot_metadata(self.settings.database_path)
+        tool_name = "get_latest_snapshot"
+        self._log_tool_request(tool_name)
+        result = snapshots.get_snapshot_metadata(self.settings.database_path)
+        self._log_tool_complete(tool_name, result=result)
+        return result
 
     def start_inventory_scan(self, excluded_workspaces: list[str] | None = None, excluded_workspaces_raw: str = "") -> dict:
+        tool_name = "start_inventory_scan"
         values: list[str] = []
         if excluded_workspaces:
             values.extend(str(item).strip() for item in excluded_workspaces if str(item).strip())
@@ -46,15 +76,20 @@ class GeoServerCleanerMcpService:
                 if value.strip()
             )
         raw = ", ".join(values)
+        self._log_tool_request(tool_name, excluded_workspaces=values)
         job_id = self.runtime.job_manager.start_scan(raw)
-        return self._job_payload(job_id)
+        result = self._job_payload(job_id)
+        self._log_tool_complete(tool_name, result=result, excluded_workspace_count=len(values))
+        return result
 
     def get_job_status(self, job_id: int) -> dict:
+        tool_name = "get_job_status"
+        self._log_tool_request(tool_name, job_id=int(job_id))
         job = db.get_job(self.settings.database_path, int(job_id))
         if job is None:
             raise RuntimeError("Job {} was not found.".format(job_id))
         serialized = job_status.serialize_job_row(job)
-        return {
+        result = {
             "job_id": int(serialized["id"]),
             "job_type": str(serialized["job_type"]),
             "status": str(serialized["status"]),
@@ -68,6 +103,8 @@ class GeoServerCleanerMcpService:
             "metadata": serialized.get("metadata") or {},
             "error_text": str(serialized.get("error_text") or ""),
         }
+        self._log_tool_complete(tool_name, result=result, status=result["status"])
+        return result
 
     def list_heaviest_stores(
         self,
@@ -77,7 +114,16 @@ class GeoServerCleanerMcpService:
         status: str = "",
         include_orphans: bool = False,
     ) -> dict:
-        return snapshots.list_heaviest_stores(
+        tool_name = "list_heaviest_stores"
+        self._log_tool_request(
+            tool_name,
+            limit=limit,
+            workspace=workspace.strip(),
+            store_type=store_type.strip(),
+            status=status.strip(),
+            include_orphans=include_orphans,
+        )
+        result = snapshots.list_heaviest_stores(
             self.settings.database_path,
             limit=limit,
             workspace=workspace.strip(),
@@ -85,21 +131,31 @@ class GeoServerCleanerMcpService:
             status=status.strip(),
             include_orphans=include_orphans,
         )
+        self._log_tool_complete(tool_name, result=result)
+        return result
 
     def summarize_workspace_usage(self, workspace: str = "", include_issues: bool = True) -> dict:
-        return snapshots.summarize_workspace_usage(
+        tool_name = "summarize_workspace_usage"
+        self._log_tool_request(tool_name, workspace=workspace.strip(), include_issues=include_issues)
+        result = snapshots.summarize_workspace_usage(
             self.settings.database_path,
             workspace=workspace.strip(),
             include_issues=include_issues,
         )
+        self._log_tool_complete(tool_name, result=result)
+        return result
 
     def list_orphans(self, limit: int = 50, path_filter: str = "", sort_order: str = "size_desc") -> dict:
-        return snapshots.list_orphans(
+        tool_name = "list_orphans"
+        self._log_tool_request(tool_name, limit=limit, path_filter=path_filter.strip(), sort_order=sort_order.strip())
+        result = snapshots.list_orphans(
             self.settings.database_path,
             limit=limit,
             path_filter=path_filter.strip(),
             sort_order=sort_order.strip(),
         )
+        self._log_tool_complete(tool_name, result=result)
+        return result
 
     def find_stores(
         self,
@@ -112,7 +168,19 @@ class GeoServerCleanerMcpService:
         sort_dir: str = "desc",
         limit: int = 50,
     ) -> dict:
-        return snapshots.find_stores(
+        tool_name = "find_stores"
+        self._log_tool_request(
+            tool_name,
+            q=q,
+            workspace=workspace.strip(),
+            status=status.strip(),
+            row_kind=row_kind.strip(),
+            store_type=store_type.strip(),
+            sort_by=sort_by.strip(),
+            sort_dir=sort_dir.strip(),
+            limit=limit,
+        )
+        result = snapshots.find_stores(
             self.settings.database_path,
             q=q,
             workspace=workspace.strip(),
@@ -123,8 +191,16 @@ class GeoServerCleanerMcpService:
             sort_dir=sort_dir.strip(),
             limit=limit,
         )
+        self._log_tool_complete(tool_name, result=result)
+        return result
 
     def delete_stores(self, store_ids: list[int] | None = None, store_keys: list[str] | None = None) -> dict:
+        tool_name = "delete_stores"
+        self._log_tool_request(
+            tool_name,
+            store_id_count=len(store_ids or []),
+            store_key_count=len(store_keys or []),
+        )
         selection = snapshots.resolve_store_selection(
             self.settings.database_path,
             self.settings,
@@ -147,31 +223,49 @@ class GeoServerCleanerMcpService:
                     "message": "No deletable store rows were selected.",
                 }
             )
+            self._log_tool_complete(tool_name, result=result, accepted_store_count=0)
             return result
         run = db.get_run(self.settings.database_path, run_id)
         excluded_workspaces_raw = str(run["excluded_workspaces"] or "") if run is not None else self.settings.excluded_workspaces_raw
         job_id = self.runtime.job_manager.start_delete(run_id, accepted_ids, excluded_workspaces_raw)
         result.update(self._job_payload(job_id))
+        self._log_tool_complete(tool_name, result=result, accepted_store_count=len(accepted_ids))
         return result
 
     def export_snapshot_csv(self, run_id: int | None = None) -> dict:
-        return snapshots.write_snapshot_export(
+        tool_name = "export_snapshot_csv"
+        self._log_tool_request(tool_name, run_id=run_id)
+        result = snapshots.write_snapshot_export(
             self.settings.database_path,
             self.settings,
             format_name="csv",
             run_id=run_id,
         )
+        self._log_tool_complete(tool_name, result=result)
+        return result
 
     def export_snapshot_html(self, run_id: int | None = None) -> dict:
-        return snapshots.write_snapshot_export(
+        tool_name = "export_snapshot_html"
+        self._log_tool_request(tool_name, run_id=run_id)
+        result = snapshots.write_snapshot_export(
             self.settings.database_path,
             self.settings,
             format_name="html",
             run_id=run_id,
         )
+        self._log_tool_complete(tool_name, result=result)
+        return result
 
 
 def build_mcp_server(runtime: AppRuntime) -> FastMCP:
+    LOGGER.info(
+        "Building MCP server",
+        extra={
+            "event": "mcp_server_build",
+            "database_path": runtime.settings.database_path,
+            "mcp_http_enabled": runtime.settings.enable_mcp_http,
+        },
+    )
     server = FastMCP("GeoServer Cleaner")
     service = GeoServerCleanerMcpService(runtime)
     server.tool(description="Return metadata for the latest completed inventory snapshot.")(service.get_latest_snapshot)
@@ -191,18 +285,25 @@ def build_streamable_http_server(runtime: AppRuntime) -> FastMCP:
     server = build_mcp_server(runtime)
     server.settings.streamable_http_path = "/"
     server.streamable_http_app()
+    LOGGER.info(
+        "Configured MCP streamable HTTP app",
+        extra={"event": "mcp_http_build", "path": server.settings.streamable_http_path},
+    )
     return server
 
 
-def run_stdio_server() -> None:
-    runtime = build_runtime()
+def run_stdio_server(settings: Settings | None = None) -> None:
+    runtime = build_runtime(settings)
     server = build_mcp_server(runtime)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        datefmt="%H:%M:%S",
+    LOGGER.info(
+        "Starting GeoServer Cleaner MCP stdio server",
+        extra={
+            "event": "mcp_stdio_start",
+            "database_path": runtime.settings.database_path,
+            "log_path": runtime.settings.app_log_path,
+            "log_level": runtime.settings.app_log_level,
+        },
     )
-    LOGGER.info("Starting GeoServer Cleaner MCP stdio server with database %s", runtime.settings.database_path)
     server.run(transport="stdio")
 
 

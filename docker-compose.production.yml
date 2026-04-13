@@ -1,6 +1,6 @@
 services:
   geoserver-cleaner:
-    image: ghcr.io/ashapira/geoserver-cleaner:${GEOSERVER_CLEANER_TAG:-2.3.0}
+    image: ghcr.io/ashapira/geoserver-cleaner:${GEOSERVER_CLEANER_TAG:-2.5.0}
     restart: unless-stopped
     ports:
       - "${APP_PORT:-8000}:8000"
@@ -21,6 +21,10 @@ services:
       APP_TITLE: ${APP_TITLE:-GeoServer Cleaner}
       APP_ENABLE_MCP_HTTP: ${APP_ENABLE_MCP_HTTP:-true}
       APP_MCP_HTTP_PATH: ${APP_MCP_HTTP_PATH:-/mcp}
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+      APP_LOG_PATH: ${APP_LOG_PATH:-/app_data/logs/geoserver_cleaner.log}
+      APP_LOG_MAX_BYTES: ${APP_LOG_MAX_BYTES:-10485760}
+      APP_LOG_BACKUP_COUNT: ${APP_LOG_BACKUP_COUNT:-5}
     volumes:
       - ${GEOSERVER_DATA_DIR_HOST}:/geoserver_data
       - geoserver-cleaner-app-data:/app_data

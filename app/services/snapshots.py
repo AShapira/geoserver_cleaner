@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections import defaultdict
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -14,6 +15,7 @@ from app.services import deletion
 DEFAULT_FIND_LIMIT = 50
 DEFAULT_HEAVIEST_LIMIT = 5
 DEFAULT_ORPHAN_LIMIT = 50
+LOGGER = logging.getLogger("geoserver_cleaner.snapshots")
 
 
 def _row_to_dict(row) -> Dict[str, object]:
@@ -378,6 +380,15 @@ def write_snapshot_export(
     format_name: str,
     run_id: Optional[int] = None,
 ) -> Dict[str, object]:
+    LOGGER.info(
+        "Writing snapshot export",
+        extra={
+            "event": "snapshot_export_start",
+            "format": format_name,
+            "run_id": run_id,
+            "export_dir": settings.export_dir,
+        },
+    )
     os.makedirs(settings.export_dir, exist_ok=True)
     if format_name == "csv":
         metadata, content = build_snapshot_csv_bytes(db_path, run_id=run_id)
@@ -392,10 +403,21 @@ def write_snapshot_export(
     else:
         raise RuntimeError("Unsupported export format: {}".format(format_name))
     filename = os.path.basename(path)
-    return {
+    result = {
         "snapshot": metadata,
         "path": os.path.abspath(path),
         "filename": filename,
         "format": format_name,
         "size_bytes": os.path.getsize(path),
     }
+    LOGGER.info(
+        "Snapshot export written",
+        extra={
+            "event": "snapshot_export_complete",
+            "format": format_name,
+            "run_id": int(metadata["run_id"]),
+            "path": result["path"],
+            "size_bytes": result["size_bytes"],
+        },
+    )
+    return result

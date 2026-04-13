@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import List
 
+from app.logging_utils import default_log_path, normalize_log_level
 from app.reporting.core import parse_excluded_workspaces, worker_default
 
 
@@ -24,6 +25,16 @@ def _normalized_http_path(value: str) -> str:
     return "/" + "/".join(parts)
 
 
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    value = int(raw)
+    if value <= 0:
+        raise ValueError("{} must be greater than 0.".format(name))
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     geoserver_url: str
@@ -42,11 +53,18 @@ class Settings:
     app_title: str
     enable_mcp_http: bool
     mcp_http_path: str
+    app_log_level: str
+    app_log_path: str
+    app_log_max_bytes: int
+    app_log_backup_count: int
 
     @classmethod
     def from_env(cls) -> "Settings":
         data_dir = os.path.abspath(
             os.getenv("GEOSERVER_DATA_DIR", os.path.join(os.getcwd(), "geoserver_test", "geoserver_data"))
+        )
+        database_path = os.path.abspath(
+            os.getenv("APP_DATABASE_PATH", os.path.join(os.getcwd(), "app_data", "geoserver_cleaner.sqlite3"))
         )
         return cls(
             geoserver_url=os.getenv("GEOSERVER_URL", "http://localhost:8081/geoserver"),
@@ -58,9 +76,7 @@ class Settings:
             insecure=_bool_env("GEOSERVER_INSECURE", False),
             timeout=int(os.getenv("GEOSERVER_TIMEOUT", "60")),
             workers=int(os.getenv("GEOSERVER_WORKERS", str(worker_default()))),
-            database_path=os.path.abspath(
-                os.getenv("APP_DATABASE_PATH", os.path.join(os.getcwd(), "app_data", "geoserver_cleaner.sqlite3"))
-            ),
+            database_path=database_path,
             export_dir=os.path.abspath(
                 os.getenv("APP_EXPORT_DIR", os.path.join(os.getcwd(), "app_exports"))
             ),
@@ -69,6 +85,10 @@ class Settings:
             app_title=os.getenv("APP_TITLE", "GeoServer Cleaner"),
             enable_mcp_http=_bool_env("APP_ENABLE_MCP_HTTP", False),
             mcp_http_path=_normalized_http_path(os.getenv("APP_MCP_HTTP_PATH", "/mcp")),
+            app_log_level=normalize_log_level(os.getenv("APP_LOG_LEVEL", "INFO")),
+            app_log_path=os.path.abspath(os.getenv("APP_LOG_PATH", default_log_path(database_path))),
+            app_log_max_bytes=_int_env("APP_LOG_MAX_BYTES", 10 * 1024 * 1024),
+            app_log_backup_count=_int_env("APP_LOG_BACKUP_COUNT", 5),
         )
 
     @property

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Callable, Dict, List, Optional, Sequence
 
 from app import db
@@ -9,6 +10,7 @@ from app.reporting.core import normalize_path, path_under_any_root
 from app.services import geoserver
 
 ProgressCallback = Callable[[dict, str], None]
+LOGGER = logging.getLogger("geoserver_cleaner.deletion")
 
 
 @dataclass
@@ -46,6 +48,14 @@ def build_delete_preview(
     run_id: int,
     store_ids: Sequence[int],
 ) -> Dict[str, object]:
+    LOGGER.info(
+        "Building delete preview",
+        extra={
+            "event": "delete_preview_build_start",
+            "run_id": run_id,
+            "selected_store_count": len(store_ids),
+        },
+    )
     rows = db.get_rows_by_ids(db_path, run_id, store_ids)
     rows_by_id = {int(row["id"]): row for row in rows}
     ordered_rows = [rows_by_id[store_id] for store_id in store_ids if store_id in rows_by_id]
@@ -129,7 +139,7 @@ def build_delete_preview(
         warnings.append("Delete Data = No means store deletion is configuration-only or the data ownership is uncertain.")
 
     unique_paths = sorted(set(delete_paths), key=lambda value: value.lower())
-    return {
+    result = {
         "items": items,
         "selected_ids": [item.store_id for item in items if item.can_delete_store],
         "delete_paths": unique_paths,
@@ -137,6 +147,18 @@ def build_delete_preview(
         "blocked_count": len([item for item in items if not item.can_delete_store]),
         "delete_data_count": len(unique_paths),
     }
+    LOGGER.info(
+        "Delete preview built",
+        extra={
+            "event": "delete_preview_build_complete",
+            "run_id": run_id,
+            "selected_store_count": len(store_ids),
+            "deletable_store_count": len(result["selected_ids"]),
+            "blocked_count": int(result["blocked_count"]),
+            "delete_data_count": int(result["delete_data_count"]),
+        },
+    )
+    return result
 
 
 def execute_delete_job(
@@ -151,6 +173,16 @@ def execute_delete_job(
     deleted_store_keys: List[str] = []
     failed_items: List[str] = []
     total_items = len(items)
+    LOGGER.info(
+        "Executing delete job",
+        extra={
+            "event": "delete_execute_start",
+            "run_id": run_id,
+            "selected_store_count": len(store_ids),
+            "candidate_item_count": total_items,
+            "delete_data_count": int(preview["delete_data_count"]),
+        },
+    )
 
     if progress_callback is not None:
         progress_callback(
@@ -168,12 +200,32 @@ def execute_delete_job(
     for index, item in enumerate(items, start=1):
         if not item.can_delete_store:
             failed_items.append("{} / {}: {}".format(item.workspace, item.store_name, item.reason or "blocked"))
+            LOGGER.warning(
+                "Delete item blocked",
+                extra={
+                    "event": "delete_item_blocked",
+                    "run_id": run_id,
+                    "workspace": item.workspace,
+                    "store_name": item.store_name,
+                    "reason": item.reason,
+                },
+            )
         else:
             try:
                 geoserver.delete_store(settings, item.workspace, item.store_kind, item.store_name)
                 deleted_store_keys.append("{}/{}".format(item.workspace, item.store_name))
             except Exception as exc:
                 failed_items.append("{} / {}: {}".format(item.workspace, item.store_name, exc))
+                LOGGER.exception(
+                    "Delete item failed",
+                    extra={
+                        "event": "delete_item_failed",
+                        "run_id": run_id,
+                        "workspace": item.workspace,
+                        "store_name": item.store_name,
+                        "store_kind": item.store_kind,
+                    },
+                )
         if progress_callback is not None:
             remaining = max(total_items - index, 0)
             progress_callback(
@@ -199,7 +251,7 @@ def execute_delete_job(
             "failed_items": failed_items,
         },
     )
-    return {
+    result = {
         "deleted_stores": deleted_store_keys,
         "deleted_count": len(deleted_store_keys),
         "delete_data_count": int(preview["delete_data_count"]),
@@ -210,3 +262,14 @@ def execute_delete_job(
         "total_delete_items": total_items,
         "remaining_delete_items": 0,
     }
+    LOGGER.info(
+        "Delete job execution finished",
+        extra={
+            "event": "delete_execute_complete",
+            "run_id": run_id,
+            "deleted_count": result["deleted_count"],
+            "failed_count": result["failed_count"],
+            "delete_data_count": result["delete_data_count"],
+        },
+    )
+    return result

@@ -1,5 +1,6 @@
 import importlib
 import json
+import logging
 import os
 import socket
 import sys
@@ -50,7 +51,18 @@ class UvicornThread:
 
 
 class GeoServerCleanerMcpTests(unittest.TestCase):
+    def close_logs(self):
+        try:
+            from app.logging_utils import shutdown_app_logging
+
+            shutdown_app_logging()
+        except Exception:
+            logging.shutdown()
+
     def patch_env(self, temp_dir: str, extra_env: dict[str, str] | None = None):
+        log_fd, log_path = tempfile.mkstemp(prefix="geoserver_cleaner_test_", suffix=".log")
+        os.close(log_fd)
+        os.unlink(log_path)
         env_updates = {
             "APP_DATABASE_PATH": os.path.join(temp_dir, "geoserver_cleaner.sqlite3"),
             "APP_EXPORT_DIR": os.path.join(temp_dir, "exports"),
@@ -58,12 +70,14 @@ class GeoServerCleanerMcpTests(unittest.TestCase):
             "GEOSERVER_URL": "http://example.test/geoserver",
             "GEOSERVER_USER": "admin",
             "GEOSERVER_PASSWORD": "secret",
+            "APP_LOG_PATH": log_path,
         }
         if extra_env:
             env_updates.update(extra_env)
         patcher = patch.dict(os.environ, env_updates, clear=False)
         patcher.start()
         self.addCleanup(patcher.stop)
+        self.addCleanup(self.close_logs)
         return env_updates
 
     def load_server(self, temp_dir: str):

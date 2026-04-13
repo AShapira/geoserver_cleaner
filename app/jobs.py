@@ -26,15 +26,38 @@ class JobManager:
     def start_scan(self, excluded_workspaces_raw: str = "") -> int:
         with self._lock:
             self.ensure_idle()
+            LOGGER.info(
+                "Queueing inventory scan job",
+                extra={
+                    "event": "job_scan_queue",
+                    "excluded_workspaces_raw": excluded_workspaces_raw,
+                },
+            )
             metadata = {"excluded_workspaces": excluded_workspaces_raw}
             job_id = db.create_job(self.db_path, "scan", "Inventory scan queued", metadata=metadata)
             thread = threading.Thread(target=self._run_scan, args=(job_id, excluded_workspaces_raw), daemon=True)
             thread.start()
+            LOGGER.info(
+                "Inventory scan job queued",
+                extra={
+                    "event": "job_scan_queued",
+                    "job_id": job_id,
+                },
+            )
             return job_id
 
     def start_delete(self, run_id: int, store_ids: Sequence[int], excluded_workspaces_raw: str = "") -> int:
         with self._lock:
             self.ensure_idle()
+            LOGGER.info(
+                "Queueing delete job",
+                extra={
+                    "event": "job_delete_queue",
+                    "run_id": run_id,
+                    "selected_store_count": len(store_ids),
+                    "excluded_workspaces_raw": excluded_workspaces_raw,
+                },
+            )
             metadata = {
                 "run_id": run_id,
                 "store_ids": list(store_ids),
@@ -47,10 +70,27 @@ class JobManager:
                 daemon=True,
             )
             thread.start()
+            LOGGER.info(
+                "Delete job queued",
+                extra={
+                    "event": "job_delete_queued",
+                    "job_id": job_id,
+                    "run_id": run_id,
+                    "selected_store_count": len(store_ids),
+                },
+            )
             return job_id
 
     def _run_scan(self, job_id: int, excluded_workspaces_raw: str) -> None:
         try:
+            LOGGER.info(
+                "Inventory scan job started",
+                extra={
+                    "event": "job_scan_started",
+                    "job_id": job_id,
+                    "excluded_workspaces_raw": excluded_workspaces_raw,
+                },
+            )
             base_metadata = {
                 "excluded_workspaces": excluded_workspaces_raw,
                 "phase": "discovering",
@@ -101,6 +141,15 @@ class JobManager:
                 metadata={**latest_metadata, "phase": "completed", "eta_seconds": 0},
                 finished=True,
             )
+            LOGGER.info(
+                "Inventory scan job completed",
+                extra={
+                    "event": "job_scan_completed",
+                    "job_id": job_id,
+                    "run_id": run_id,
+                    "store_count": latest_metadata.get("processed_stores"),
+                },
+            )
         except Exception as exc:
             LOGGER.exception("Scan job %s failed", job_id)
             db.update_job(
@@ -120,6 +169,15 @@ class JobManager:
         excluded_workspaces_raw: str,
     ) -> None:
         try:
+            LOGGER.info(
+                "Delete job started",
+                extra={
+                    "event": "job_delete_started",
+                    "job_id": job_id,
+                    "run_id": run_id,
+                    "selected_store_count": len(store_ids),
+                },
+            )
             base_metadata = {
                 "run_id": run_id,
                 "store_ids": list(store_ids),
@@ -203,6 +261,17 @@ class JobManager:
                 run_id=refreshed_run_id,
                 metadata={**base_metadata, **metadata, "phase": "completed", "eta_seconds": 0},
                 finished=True,
+            )
+            LOGGER.info(
+                "Delete job completed",
+                extra={
+                    "event": "job_delete_completed",
+                    "job_id": job_id,
+                    "run_id": run_id,
+                    "refreshed_run_id": refreshed_run_id,
+                    "deleted_count": metadata.get("deleted_count", 0),
+                    "failed_count": metadata.get("failed_count", 0),
+                },
             )
         except Exception as exc:
             LOGGER.exception("Delete job %s failed", job_id)

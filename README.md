@@ -189,6 +189,20 @@ Optional:
 - `APP_TITLE`
 - `APP_ENABLE_MCP_HTTP`
 - `APP_MCP_HTTP_PATH`
+- `APP_LOG_LEVEL`
+- `APP_LOG_PATH`
+- `APP_LOG_MAX_BYTES`
+- `APP_LOG_BACKUP_COUNT`
+
+Logging:
+
+- the web app and MCP server write structured JSON logs to a rotating file
+- supported `APP_LOG_LEVEL` values are `DEBUG`, `INFO`, `WARN`, `ERROR`, and `FATAL`
+- `INFOW` is accepted as an alias for `INFO`
+- default level is `INFO`
+- if `APP_LOG_PATH` is not set, the app writes to `logs/geoserver_cleaner.log` beside the SQLite database path
+- `APP_LOG_MAX_BYTES` controls rotation size per file
+- `APP_LOG_BACKUP_COUNT` controls how many rotated files are retained
 
 ## Docker
 
@@ -252,13 +266,13 @@ docker compose -f docker-compose.production.yml up -d
 
 Notes:
 
-- the default image tag is the latest tagged release currently in this repo: `2.3.0`
+- the default image tag is the latest tagged release currently in this repo: `2.5.0`
 - override it with `GEOSERVER_CLEANER_TAG` when a newer release is published
 - if the package is private, run `docker login ghcr.io` before `docker compose up`
 
 Local production flow against the repo test fixture:
 
-- use [`.env.production.local`](c:/Alex/work/geoserver_cleaner/.env.production.local) for a local `2.4.0` image run wired to [geoserver_test/geoserver_data](c:/Alex/work/geoserver_cleaner/geoserver_test/geoserver_data)
+- use [`.env.production.local`](c:/Alex/work/geoserver_cleaner/.env.production.local) for a local `2.5.0` image run wired to [geoserver_test/geoserver_data](c:/Alex/work/geoserver_cleaner/geoserver_test/geoserver_data)
 - start both the GeoServer fixture and the production app with [`scripts/run-local-production.ps1`](c:/Alex/work/geoserver_cleaner/scripts/run-local-production.ps1)
 
 ```powershell
@@ -276,6 +290,14 @@ This starts:
 - GeoServer test fixture on `http://127.0.0.1:8081/geoserver`
 - GeoServer Cleaner UI on `http://127.0.0.1:8000/stores`
 - HTTP MCP endpoint on `http://127.0.0.1:8000/mcp/`
+
+Published-image validation:
+
+- use [`scripts/validate-ghcr-image.ps1`](c:/Alex/work/geoserver_cleaner/scripts/validate-ghcr-image.ps1) to pull a published GHCR image tag, run it with the production compose file, exercise the app over HTTP, and write a Markdown validation report to `TASK_EXECUTION_REPORT.md`
+
+```powershell
+.\scripts\validate-ghcr-image.ps1 -ImageTag 2.5.0
+```
 
 VS Code workspace MCP config for that flow lives in [`.vscode/mcp.json`](c:/Alex/work/geoserver_cleaner/.vscode/mcp.json).
 

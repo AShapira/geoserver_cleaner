@@ -5,6 +5,7 @@ import logging
 import math
 import os
 import time
+import uuid
 from typing import Dict
 from urllib.parse import urlencode
 
@@ -25,12 +26,6 @@ LOGGER = logging.getLogger("geoserver_cleaner")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-    datefmt="%H:%M:%S",
-)
-
 router = APIRouter()
 
 
@@ -38,18 +33,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     runtime = build_runtime(settings)
     app = FastAPI(title=runtime.settings.app_title)
 
+    LOGGER.info(
+        "Creating FastAPI application",
+        extra={
+            "event": "web_app_create",
+            "app_title": runtime.settings.app_title,
+            "mcp_http_enabled": runtime.settings.enable_mcp_http,
+            "mcp_http_path": runtime.settings.mcp_http_path,
+        },
+    )
+
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
+        LOGGER.info(
+            "FastAPI lifespan starting",
+            extra={"event": "web_app_lifespan_start"},
+        )
         if runtime.settings.enable_mcp_http:
             mcp_server = build_streamable_http_server(runtime)
             app.state.mcp_server = mcp_server
-            LOGGER.info("MCP HTTP enabled at %s", runtime.settings.mcp_http_path)
+            LOGGER.info(
+                "MCP HTTP enabled",
+                extra={
+                    "event": "mcp_http_enabled",
+                    "mcp_http_path": runtime.settings.mcp_http_path,
+                },
+            )
             async with mcp_server.session_manager.run():
                 yield
             app.state.mcp_server = None
+            LOGGER.info(
+                "FastAPI lifespan stopping",
+                extra={"event": "web_app_lifespan_stop"},
+            )
             return
-        LOGGER.info("MCP HTTP disabled")
+        LOGGER.info(
+            "MCP HTTP disabled",
+            extra={"event": "mcp_http_disabled"},
+        )
         yield
+        LOGGER.info(
+            "FastAPI lifespan stopping",
+            extra={"event": "web_app_lifespan_stop"},
+        )
 
     app.router.lifespan_context = lifespan
     app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
@@ -58,6 +84,60 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.job_manager = runtime.job_manager
     app.state.asset_version = str(int(time.time()))
     app.include_router(router)
+
+    @app.middleware("http")
+    async def log_http_request(request: Request, call_next):
+        if request.url.path.startswith("/static"):
+            return await call_next(request)
+
+        request_id = uuid.uuid4().hex[:12]
+        started_at = time.perf_counter()
+        client_host = request.client.host if request.client else ""
+        LOGGER.info(
+            "HTTP request started",
+            extra={
+                "event": "http_request_start",
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "query_string": request.url.query,
+                "client_host": client_host,
+            },
+        )
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            LOGGER.exception(
+                "HTTP request failed",
+                extra={
+                    "event": "http_request_failed",
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "query_string": request.url.query,
+                    "client_host": client_host,
+                    "duration_ms": duration_ms,
+                },
+            )
+            raise
+
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        response.headers["X-Request-Id"] = request_id
+        LOGGER.info(
+            "HTTP request completed",
+            extra={
+                "event": "http_request_complete",
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "query_string": request.url.query,
+                "client_host": client_host,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+            },
+        )
+        return response
 
     if runtime.settings.enable_mcp_http:
         async def mcp_http_asgi(scope, receive, send) -> None:
@@ -237,10 +317,24 @@ def stores_table(request: Request):
 
 @router.post("/scan")
 def start_scan(request: Request, exclude_workspaces: str = Form("")) -> RedirectResponse:
+    LOGGER.info(
+        "Inventory scan requested",
+        extra={
+            "event": "scan_request",
+            "excluded_workspaces_raw": exclude_workspaces.strip(),
+        },
+    )
     try:
         job_id = request.app.state.job_manager.start_scan(exclude_workspaces.strip())
     except Exception as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    LOGGER.info(
+        "Inventory scan queued",
+        extra={
+            "event": "scan_queued",
+            "job_id": job_id,
+        },
+    )
     return RedirectResponse(url="/jobs/{}".format(job_id), status_code=303)
 
 
@@ -288,11 +382,30 @@ def delete_preview(request: Request, selected_ids: str = Form("")):
     settings = request_runtime(request).settings
     latest_run = latest_run_or_404(settings)
     store_ids = deletion.parse_selected_ids(selected_ids)
+    LOGGER.info(
+        "Delete preview requested",
+        extra={
+            "event": "delete_preview_request",
+            "run_id": int(latest_run["id"]),
+            "selected_store_count": len(store_ids),
+        },
+    )
     preview = deletion.build_delete_preview(
         settings.database_path,
         settings,
         int(latest_run["id"]),
         store_ids,
+    )
+    LOGGER.info(
+        "Delete preview built",
+        extra={
+            "event": "delete_preview_complete",
+            "run_id": int(latest_run["id"]),
+            "selected_store_count": len(store_ids),
+            "deletable_store_count": len(preview["selected_ids"]),
+            "blocked_count": int(preview["blocked_count"]),
+            "delete_data_count": int(preview["delete_data_count"]),
+        },
     )
     return TEMPLATES.TemplateResponse(
         request,
@@ -315,6 +428,14 @@ def delete_execute(
     store_ids = deletion.parse_selected_ids(selected_ids)
     if not store_ids:
         raise HTTPException(status_code=400, detail="No stores were selected.")
+    LOGGER.info(
+        "Delete execution requested",
+        extra={
+            "event": "delete_execute_request",
+            "run_id": run_id,
+            "selected_store_count": len(store_ids),
+        },
+    )
     preview = deletion.build_delete_preview(
         settings.database_path,
         settings,
@@ -330,6 +451,16 @@ def delete_execute(
         job_id = request.app.state.job_manager.start_delete(run_id, valid_store_ids, excluded_workspaces_raw)
     except Exception as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    LOGGER.info(
+        "Delete job queued",
+        extra={
+            "event": "delete_job_queued",
+            "job_id": job_id,
+            "run_id": run_id,
+            "selected_store_count": len(store_ids),
+            "deletable_store_count": len(valid_store_ids),
+        },
+    )
     return RedirectResponse(url="/jobs/{}".format(job_id), status_code=303)
 
 
@@ -338,6 +469,14 @@ def download_latest_csv(request: Request) -> Response:
     settings = request_runtime(request).settings
     latest_run = latest_run_or_404(settings)
     filename = build_report_filename(int(latest_run["id"]), "csv")
+    LOGGER.info(
+        "CSV export requested",
+        extra={
+            "event": "csv_download_request",
+            "run_id": int(latest_run["id"]),
+            "export_filename": filename,
+        },
+    )
     _, content = snapshots.build_snapshot_csv_bytes(settings.database_path, run_id=int(latest_run["id"]))
     return Response(
         content=content,
@@ -351,6 +490,14 @@ def download_latest_html(request: Request) -> Response:
     settings = request_runtime(request).settings
     latest_run = latest_run_or_404(settings)
     filename = build_report_filename(int(latest_run["id"]), "html")
+    LOGGER.info(
+        "HTML export requested",
+        extra={
+            "event": "html_download_request",
+            "run_id": int(latest_run["id"]),
+            "export_filename": filename,
+        },
+    )
     _, content = snapshots.build_snapshot_html_text(
         settings.database_path,
         settings,

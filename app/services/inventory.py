@@ -241,6 +241,16 @@ def run_inventory_scan(
 ) -> int:
     effective_settings = settings_with_excluded_workspaces(settings, excluded_workspaces_raw)
     catalog_source = effective_catalog_source(effective_settings)
+    LOGGER.info(
+        "Starting inventory scan",
+        extra={
+            "event": "inventory_scan_start",
+            "catalog_source": catalog_source,
+            "data_dir": os.path.abspath(effective_settings.data_dir),
+            "workers": effective_settings.workers,
+            "excluded_workspaces": effective_settings.excluded_workspaces,
+        },
+    )
     run_id = db.create_inventory_run(
         db_path,
         catalog_source=catalog_source,
@@ -265,7 +275,26 @@ def run_inventory_scan(
             tracked_size_bytes=tracked_size_bytes,
             notes="",
         )
+        LOGGER.info(
+            "Inventory scan completed",
+            extra={
+                "event": "inventory_scan_complete",
+                "run_id": run_id,
+                "store_count": len(store_rows),
+                "orphan_count": len(orphan_rows),
+                "issue_count": len(issue_rows),
+                "tracked_size_bytes": tracked_size_bytes,
+            },
+        )
         return run_id
     except Exception as exc:
+        LOGGER.exception(
+            "Inventory scan failed",
+            extra={
+                "event": "inventory_scan_failed",
+                "run_id": run_id,
+                "catalog_source": catalog_source,
+            },
+        )
         db.fail_inventory_run(db_path, run_id, str(exc))
         raise
