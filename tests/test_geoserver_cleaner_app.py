@@ -273,6 +273,33 @@ class GeoServerCleanerAppTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertIn("GeoServer will delete store configuration only; data is outside data_dir.", response.text)
 
+    def test_delete_preview_keeps_mapped_external_store_as_configuration_only(self):
+        with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as external_dir:
+            external_path = os.path.join(external_dir, "external.tif")
+            open(external_path, "wb").close()
+            module = self.load_app(
+                temp_dir,
+                {
+                    "GEOSERVER_EXTERNAL_PATH_MAPPINGS": json.dumps({r"C:\data\osm": external_dir}),
+                },
+            )
+            run_id = self.seed_run(
+                module,
+                [
+                    self.make_row(
+                        temp_dir,
+                        resolved_path=external_path,
+                        normalized_path=os.path.normcase(os.path.normpath(external_path)),
+                        configured_path=r"C:\data\osm\external.tif",
+                    )
+                ],
+            )
+            row = module.db.get_run_rows(module.SETTINGS.database_path, run_id)[0]
+            with TestClient(module.app) as client:
+                response = client.post("/delete/preview", data={"selected_ids": str(row["id"])})
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("GeoServer will delete store configuration only; data is outside data_dir.", response.text)
+
     def test_delete_preview_marks_unresolved_store_as_configuration_only(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             os.makedirs(os.path.join(temp_dir, "data"), exist_ok=True)

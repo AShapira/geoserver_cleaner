@@ -1,6 +1,6 @@
 services:
   geoserver-cleaner:
-    image: ghcr.io/ashapira/geoserver-cleaner:${GEOSERVER_CLEANER_TAG:-2.5.0}
+    image: ghcr.io/ashapira/geoserver-cleaner:${GEOSERVER_CLEANER_TAG:-2.6.0}
     restart: unless-stopped
     ports:
       - "${APP_PORT:-8000}:8000"
@@ -9,6 +9,7 @@ services:
       GEOSERVER_USER: ${GEOSERVER_USER}
       GEOSERVER_PASSWORD: ${GEOSERVER_PASSWORD}
       GEOSERVER_DATA_DIR: /geoserver_data
+      GEOSERVER_EXTERNAL_PATH_MAPPINGS: '${GEOSERVER_EXTERNAL_PATH_MAPPINGS:-{}}'
       GEOSERVER_CATALOG_SOURCE: ${GEOSERVER_CATALOG_SOURCE:-filesystem}
       GEOSERVER_EXCLUDE_WORKSPACES: ${GEOSERVER_EXCLUDE_WORKSPACES:-}
       GEOSERVER_TIMEOUT: ${GEOSERVER_TIMEOUT:-60}
@@ -27,6 +28,10 @@ services:
       APP_LOG_BACKUP_COUNT: ${APP_LOG_BACKUP_COUNT:-5}
     volumes:
       - ${GEOSERVER_DATA_DIR_HOST}:/geoserver_data
+      # Example:
+      # GEOSERVER_EXTERNAL_PATH_MAPPINGS={"C:\\data\\osm":"/ext_data_path"}
+      # GEOSERVER_EXTERNAL_OSM_HOST=/host/path/to/osm
+      # - ${GEOSERVER_EXTERNAL_OSM_HOST}:/ext_data_path
       - geoserver-cleaner-app-data:/app_data
       - geoserver-cleaner-exports:/app_exports
 

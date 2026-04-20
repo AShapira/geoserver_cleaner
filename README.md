@@ -178,6 +178,7 @@ Optional:
 
 - `GEOSERVER_CATALOG_SOURCE`
   `auto`, `filesystem`, or `rest`
+- `GEOSERVER_EXTERNAL_PATH_MAPPINGS`
 - `GEOSERVER_EXCLUDE_WORKSPACES`
 - `GEOSERVER_TIMEOUT`
 - `GEOSERVER_WORKERS`
@@ -193,6 +194,25 @@ Optional:
 - `APP_LOG_PATH`
 - `APP_LOG_MAX_BYTES`
 - `APP_LOG_BACKUP_COUNT`
+
+External path mappings:
+
+- use `GEOSERVER_EXTERNAL_PATH_MAPPINGS` when GeoServer and GeoServer Cleaner see the same external share through different absolute paths
+- the value must be a JSON object whose keys are GeoServer-visible absolute roots and whose values are cleaner-visible absolute roots
+- example:
+
+```json
+{
+  "C:\\data\\osm": "/ext_data_path",
+  "\\\\fileserver\\gis": "/mnt/gis"
+}
+```
+
+- mappings are applied only to absolute external store paths
+- `data/...` and other relative paths still resolve from `GEOSERVER_DATA_DIR`
+- mapped external roots are used for inventory visibility and sizing only
+- mapped external roots are not included in orphan detection
+- if the mapped cleaner-side root is missing or inaccessible, the store remains `missing` and the row notes explain that the mapped external root is not accessible from the current runtime
 
 Logging:
 
@@ -248,6 +268,17 @@ The compose file is:
 
 - [docker-compose.geoserver-cleaner.yml](c:/Alex/work/geoserver_cleaner/docker-compose.geoserver-cleaner.yml)
 
+Example external-store mapping in Docker:
+
+```yaml
+environment:
+  GEOSERVER_EXTERNAL_PATH_MAPPINGS: '{"C:\\data\\osm":"/ext_data_path"}'
+volumes:
+  - /host/path/to/osm:/ext_data_path
+```
+
+This example means GeoServer is configured with `C:\data\osm`, while the cleaner container sees the same data at `/ext_data_path`.
+
 Production compose:
 
 - [docker-compose.production.yml](c:/Alex/work/geoserver_cleaner/docker-compose.production.yml)
@@ -266,13 +297,13 @@ docker compose -f docker-compose.production.yml up -d
 
 Notes:
 
-- the default image tag is the latest tagged release currently in this repo: `2.5.0`
+- the default image tag is the latest tagged release currently in this repo: `2.6.0`
 - override it with `GEOSERVER_CLEANER_TAG` when a newer release is published
 - if the package is private, run `docker login ghcr.io` before `docker compose up`
 
 Local production flow against the repo test fixture:
 
-- use [`.env.production.local`](c:/Alex/work/geoserver_cleaner/.env.production.local) for a local `2.5.0` image run wired to [geoserver_test/geoserver_data](c:/Alex/work/geoserver_cleaner/geoserver_test/geoserver_data)
+- use [`.env.production.local`](c:/Alex/work/geoserver_cleaner/.env.production.local) for a local `2.6.0` image run wired to [geoserver_test/geoserver_data](c:/Alex/work/geoserver_cleaner/geoserver_test/geoserver_data)
 - start both the GeoServer fixture and the production app with [`scripts/run-local-production.ps1`](c:/Alex/work/geoserver_cleaner/scripts/run-local-production.ps1)
 
 ```powershell
@@ -296,7 +327,7 @@ Published-image validation:
 - use [`scripts/validate-ghcr-image.ps1`](c:/Alex/work/geoserver_cleaner/scripts/validate-ghcr-image.ps1) to pull a published GHCR image tag, run it with the production compose file, exercise the app over HTTP, and write a Markdown validation report to `TASK_EXECUTION_REPORT.md`
 
 ```powershell
-.\scripts\validate-ghcr-image.ps1 -ImageTag 2.5.0
+.\scripts\validate-ghcr-image.ps1 -ImageTag 2.6.0
 ```
 
 VS Code workspace MCP config for that flow lives in [`.vscode/mcp.json`](c:/Alex/work/geoserver_cleaner/.vscode/mcp.json).
@@ -358,6 +389,10 @@ The delete preview and MCP delete tool distinguish between:
   GeoServer can remove store configuration and internal data
 - external or unresolved data
   GeoServer removes store configuration only
+
+External path mappings do not change delete semantics:
+
+- if mapped data still resolves outside `data_dir`, delete preview remains configuration-only
 
 Not allowed:
 

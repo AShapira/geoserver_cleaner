@@ -10,6 +10,7 @@ services:
       GEOSERVER_USER: admin
       GEOSERVER_PASSWORD: geoserver
       GEOSERVER_DATA_DIR: /geoserver_data
+      GEOSERVER_EXTERNAL_PATH_MAPPINGS: "{}"
       GEOSERVER_CATALOG_SOURCE: filesystem
       GEOSERVER_EXCLUDE_WORKSPACES: ""
       APP_DATABASE_PATH: /app_data/geoserver_cleaner.sqlite3
@@ -20,6 +21,11 @@ services:
       APP_LOG_BACKUP_COUNT: ${APP_LOG_BACKUP_COUNT:-5}
     volumes:
       - ./geoserver_test/geoserver_data:/geoserver_data
+      # Example for external stores:
+      # If GeoServer sees C:\data\osm and this container sees the same share at /ext_data_path,
+      # set GEOSERVER_EXTERNAL_PATH_MAPPINGS to {"C:\\data\\osm":"/ext_data_path"}
+      # and mount that same external location here.
+      # - ./external_data/osm:/ext_data_path
       - geoserver-cleaner-app-data:/app_data
 
 volumes:

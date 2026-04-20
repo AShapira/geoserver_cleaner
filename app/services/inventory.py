@@ -5,16 +5,18 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
-from typing import Callable, List, Optional, Set
+from typing import Callable, List, Optional, Sequence, Set
 
 from app import db
 from app.config import Settings
 from app.reporting.core import (
     CatalogStore,
+    ExternalPathMapping,
     GeoServerClient,
     build_error_row,
     collect_orphans,
     collect_rest_catalog,
+    inspect_external_root_accessibility,
     list_catalog_workspaces,
     normalize_path,
     process_catalog_store,
@@ -63,6 +65,8 @@ def collect_inventory_rows(
     excluded_workspaces = set(settings.excluded_workspaces)
     catalog_source = effective_catalog_source(settings)
     client = create_client(settings)
+    external_path_mappings: Sequence[ExternalPathMapping] = settings.external_path_mappings
+    external_root_accessibility = inspect_external_root_accessibility(external_path_mappings)
 
     rows: List[dict] = []
     referenced_roots: List[str] = []
@@ -150,7 +154,13 @@ def collect_inventory_rows(
         )
     with ThreadPoolExecutor(max_workers=settings.workers or worker_default()) as executor:
         future_map = {
-            executor.submit(process_catalog_store, catalog_store, data_dir): catalog_store
+            executor.submit(
+                process_catalog_store,
+                catalog_store,
+                data_dir,
+                external_path_mappings,
+                external_root_accessibility,
+            ): catalog_store
             for catalog_store in included_stores
         }
         completed = 0

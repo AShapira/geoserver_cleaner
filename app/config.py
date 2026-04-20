@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import List
+from typing import List, Tuple
 
 from app.logging_utils import default_log_path, normalize_log_level
-from app.reporting.core import parse_excluded_workspaces, worker_default
+from app.reporting.core import ExternalPathMapping, parse_excluded_workspaces, parse_external_path_mappings, worker_default
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
@@ -41,6 +41,7 @@ class Settings:
     geoserver_username: str
     geoserver_password: str
     data_dir: str
+    external_path_mappings: Tuple[ExternalPathMapping, ...]
     catalog_source: str
     excluded_workspaces_raw: str
     insecure: bool
@@ -71,6 +72,9 @@ class Settings:
             geoserver_username=os.getenv("GEOSERVER_USER", "admin"),
             geoserver_password=os.getenv("GEOSERVER_PASSWORD", "geoserver"),
             data_dir=data_dir,
+            external_path_mappings=parse_external_path_mappings(
+                os.getenv("GEOSERVER_EXTERNAL_PATH_MAPPINGS", "")
+            ),
             catalog_source=os.getenv("GEOSERVER_CATALOG_SOURCE", "auto").strip().lower() or "auto",
             excluded_workspaces_raw=os.getenv("GEOSERVER_EXCLUDE_WORKSPACES", ""),
             insecure=_bool_env("GEOSERVER_INSECURE", False),

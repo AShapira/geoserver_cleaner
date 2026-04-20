@@ -9,7 +9,9 @@ import html
 import io
 import json
 import logging
+import ntpath
 import os
+import posixpath
 import re
 import ssl
 import sys
@@ -17,7 +19,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, unquote, urljoin
+from urllib.parse import quote, unquote, urljoin, urlparse
 from urllib.request import (
     HTTPBasicAuthHandler,
     HTTPPasswordMgrWithDefaultRealm,
@@ -75,6 +77,9 @@ RASTER_STEM_SUFFIXES = {
 
 LOGGER = logging.getLogger("geoserver_cleaner.reporting")
 
+WINDOWS_ABSOLUTE_RE = re.compile(r"^[a-zA-Z]:[\\/]")
+WINDOWS_DRIVE_WITH_SLASHES_RE = re.compile(r"^[/\\]+[a-zA-Z]:")
+
 @dataclass
 class ScanResult:
     size_bytes: int
@@ -94,6 +99,21 @@ class CatalogStore:
     notes: str = ""
 
 
+@dataclass(frozen=True)
+class ExternalPathMapping:
+    geoserver_root: str
+    cleaner_root: str
+    geoserver_style: str
+    geoserver_root_normalized: str
+    cleaner_root_normalized: str
+
+
+@dataclass(frozen=True)
+class ResolvedStorePath:
+    resolved_path: str
+    mapping: Optional[ExternalPathMapping] = None
+
+
 @dataclass
 class ProcessedStore:
     row: dict
@@ -111,6 +131,171 @@ def configure_logging(level_name: str) -> None:
 
 def normalize_path(path: str) -> str:
     return os.path.normcase(os.path.normpath(path))
+
+
+def parse_external_path_mappings(raw: str) -> Tuple[ExternalPathMapping, ...]:
+    if raw is None or not raw.strip():
+        return ()
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("GEOSERVER_EXTERNAL_PATH_MAPPINGS must be valid JSON.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("GEOSERVER_EXTERNAL_PATH_MAPPINGS must be a JSON object.")
+
+    mappings: List[ExternalPathMapping] = []
+    for geoserver_root, cleaner_root in payload.items():
+        source = str(geoserver_root or "").strip()
+        target = str(cleaner_root or "").strip()
+        if not source or not target:
+            raise ValueError("GEOSERVER_EXTERNAL_PATH_MAPPINGS entries must use non-empty roots.")
+        source_style = detect_absolute_path_style(source)
+        if source_style is None:
+            raise ValueError(
+                "GEOSERVER_EXTERNAL_PATH_MAPPINGS source roots must be absolute paths: {!r}".format(source)
+            )
+        if not os.path.isabs(target):
+            raise ValueError(
+                "GEOSERVER_EXTERNAL_PATH_MAPPINGS cleaner roots must be absolute paths for this runtime: {!r}".format(
+                    target
+                )
+            )
+        cleaner_root = os.path.abspath(target)
+        mappings.append(
+            ExternalPathMapping(
+                geoserver_root=source,
+                cleaner_root=cleaner_root,
+                geoserver_style=source_style,
+                geoserver_root_normalized=normalize_style_path(source, source_style),
+                cleaner_root_normalized=normalize_path(cleaner_root),
+            )
+        )
+
+    mappings.sort(key=lambda item: len(item.geoserver_root_normalized), reverse=True)
+    return tuple(mappings)
+
+
+def detect_absolute_path_style(path: str) -> Optional[str]:
+    value = str(path or "").strip()
+    if not value:
+        return None
+    if WINDOWS_DRIVE_WITH_SLASHES_RE.match(value):
+        return "windows"
+    if WINDOWS_ABSOLUTE_RE.match(value):
+        return "windows"
+    if value.startswith("\\\\") or value.startswith("//"):
+        return "windows"
+    if value.startswith("/"):
+        return "posix"
+    return None
+
+
+def normalize_style_path(path: str, style: str) -> str:
+    if style == "windows":
+        value = path.replace("/", "\\")
+        if WINDOWS_DRIVE_WITH_SLASHES_RE.match(value):
+            value = value.lstrip("/\\")
+        return ntpath.normcase(ntpath.normpath(value))
+    if style == "posix":
+        value = path.replace("\\", "/")
+        if value.startswith("//"):
+            value = "/" + value.lstrip("/")
+        return posixpath.normpath(value)
+    raise ValueError("Unsupported path style: {}".format(style))
+
+
+def _path_starts_with_root(path: str, root: str, style: str) -> bool:
+    separator = "\\" if style == "windows" else "/"
+    return path == root or path.startswith(root + separator)
+
+
+def _relative_from_root(path: str, root: str, style: str) -> str:
+    if path == root:
+        return ""
+    separator_chars = "\\/" if style == "windows" else "/"
+    return path[len(root) :].lstrip(separator_chars)
+
+
+def _split_local_segments(value: str) -> List[str]:
+    return [segment for segment in re.split(r"[\\/]+", value or "") if segment]
+
+
+def _join_local_root(root: str, relative_path: str) -> str:
+    result = root
+    for segment in _split_local_segments(relative_path):
+        result = os.path.join(result, segment)
+    return os.path.abspath(result)
+
+
+def inspect_external_root_accessibility(
+    external_path_mappings: Sequence[ExternalPathMapping],
+) -> Dict[str, bool]:
+    accessibility: Dict[str, bool] = {}
+    for mapping in external_path_mappings:
+        if mapping.cleaner_root_normalized in accessibility:
+            continue
+        try:
+            is_accessible = os.path.isdir(mapping.cleaner_root) and os.access(
+                mapping.cleaner_root,
+                os.R_OK | os.X_OK,
+            )
+        except OSError:
+            is_accessible = False
+        accessibility[mapping.cleaner_root_normalized] = is_accessible
+    return accessibility
+
+
+def _decode_configured_path(configured_path: str) -> Tuple[str, bool]:
+    raw = unquote(str(configured_path or "").strip())
+    if not raw:
+        return "", False
+    if not raw.lower().startswith("file:"):
+        return raw, False
+
+    parsed = urlparse(raw)
+    netloc = unquote(parsed.netloc or "")
+    path = unquote(parsed.path or "")
+    if netloc:
+        if re.match(r"^[a-zA-Z]:$", netloc):
+            return netloc + path, True
+        return "//{}{}".format(netloc, path), True
+    if not path:
+        path = raw[5:]
+    if WINDOWS_DRIVE_WITH_SLASHES_RE.match(path):
+        path = path.lstrip("/\\")
+    return path, True
+
+
+def _is_data_relative_path(path: str) -> bool:
+    normalized = str(path or "").strip().replace("\\", "/").strip("/")
+    lowered = normalized.lower()
+    return lowered == "data" or lowered.startswith("data/")
+
+
+def _apply_external_path_mapping(
+    external_path: str,
+    external_path_mappings: Sequence[ExternalPathMapping],
+) -> Optional[ResolvedStorePath]:
+    source_style = detect_absolute_path_style(external_path)
+    if source_style is None:
+        return None
+    normalized_source = normalize_style_path(external_path, source_style)
+    for mapping in external_path_mappings:
+        if mapping.geoserver_style != source_style:
+            continue
+        if not _path_starts_with_root(normalized_source, mapping.geoserver_root_normalized, source_style):
+            continue
+        relative_path = _relative_from_root(
+            normalized_source,
+            mapping.geoserver_root_normalized,
+            source_style,
+        )
+        return ResolvedStorePath(
+            resolved_path=_join_local_root(mapping.cleaner_root, relative_path),
+            mapping=mapping,
+        )
+    return None
 
 
 def bytes_to_gb(size_bytes: int) -> str:
@@ -320,35 +505,28 @@ def extract_store_path(store_detail: dict, store_kind: str) -> str:
     return candidates[0] if candidates else ""
 
 
-def resolve_store_path(configured_path: str, data_dir: str) -> str:
+def resolve_store_path(
+    configured_path: str,
+    data_dir: str,
+    external_path_mappings: Sequence[ExternalPathMapping] = (),
+) -> ResolvedStorePath:
     if not configured_path:
-        return ""
+        return ResolvedStorePath("")
 
     data_dir = os.path.abspath(data_dir)
-    value = unquote(configured_path.strip()).replace("/", os.sep).replace("\\", os.sep)
-    lower = value.lower()
+    value, _used_file_scheme = _decode_configured_path(configured_path)
+    absolute_style = detect_absolute_path_style(value)
+    if absolute_style is not None:
+        mapped = _apply_external_path_mapping(value, external_path_mappings)
+        if mapped is not None:
+            return mapped
+        return ResolvedStorePath(value)
 
-    if lower.startswith("file:"):
-        suffix = value[5:]
-        suffix = suffix.replace("/", os.sep).replace("\\", os.sep)
-        if re.match(r"^[/\\]+[a-zA-Z]:", suffix):
-            suffix = suffix.lstrip("/\\")
-            return os.path.abspath(suffix)
-        if re.match(r"^[a-zA-Z]:[\\/]", suffix) or suffix.startswith("\\\\"):
-            return os.path.abspath(suffix)
-        if lower.startswith("file:data" + os.sep) or lower == "file:data":
-            relative = suffix[len("data") :].lstrip("/\\")
-            return os.path.abspath(os.path.join(data_dir, "data", relative))
-        return os.path.abspath(os.path.join(data_dir, suffix))
+    if _is_data_relative_path(value):
+        relative = value[4:].lstrip("/\\")
+        return ResolvedStorePath(_join_local_root(os.path.join(data_dir, "data"), relative))
 
-    if re.match(r"^[a-zA-Z]:[\\/]", value) or value.startswith("\\\\"):
-        return os.path.abspath(value)
-
-    if lower == "data" or lower.startswith("data" + os.sep):
-        relative = value[len("data") :].lstrip("/\\")
-        return os.path.abspath(os.path.join(data_dir, "data", relative))
-
-    return os.path.abspath(os.path.join(data_dir, value))
+    return ResolvedStorePath(_join_local_root(data_dir, value))
 
 
 def parse_xml_file(path: str) -> ElementTree.Element:
@@ -928,7 +1106,12 @@ def collect_rest_catalog(
     return workspace_names, catalog_stores, error_rows
 
 
-def process_catalog_store(catalog_store: CatalogStore, data_dir: str) -> ProcessedStore:
+def process_catalog_store(
+    catalog_store: CatalogStore,
+    data_dir: str,
+    external_path_mappings: Sequence[ExternalPathMapping] = (),
+    external_root_accessibility: Optional[Dict[str, bool]] = None,
+) -> ProcessedStore:
     if catalog_store.status != "ok":
         return ProcessedStore(
             row=build_error_row(
@@ -941,7 +1124,8 @@ def process_catalog_store(catalog_store: CatalogStore, data_dir: str) -> Process
         )
 
     configured_path = catalog_store.configured_path
-    resolved_path = resolve_store_path(configured_path, data_dir)
+    resolved = resolve_store_path(configured_path, data_dir, external_path_mappings=external_path_mappings)
+    resolved_path = resolved.resolved_path
 
     if not configured_path:
         return ProcessedStore(
@@ -958,6 +1142,30 @@ def process_catalog_store(catalog_store: CatalogStore, data_dir: str) -> Process
                 file_count=0,
                 status="unresolved",
                 notes="Could not find a usable filesystem path in store configuration.",
+            )
+        )
+
+    if (
+        resolved.mapping is not None
+        and external_root_accessibility is not None
+        and not external_root_accessibility.get(resolved.mapping.cleaner_root_normalized, False)
+    ):
+        return ProcessedStore(
+            row=build_row(
+                row_kind="store",
+                workspace=catalog_store.workspace,
+                store_name=catalog_store.store_name,
+                store_type=catalog_store.store_type,
+                layer_names=catalog_store.layer_names,
+                configured_path=configured_path,
+                resolved_path=resolved_path,
+                path_kind="missing",
+                size_bytes=0,
+                file_count=0,
+                status="missing",
+                notes="Mapped external root '{}' is not accessible from the current runtime.".format(
+                    resolved.mapping.cleaner_root
+                ),
             )
         )
 
@@ -1007,10 +1215,12 @@ def inventory_stores(
     excluded_workspaces: Set[str],
     catalog_source: str = "auto",
     workers: Optional[int] = None,
+    external_path_mappings: Sequence[ExternalPathMapping] = (),
 ) -> Tuple[List[dict], List[str], Set[str]]:
     rows: List[dict] = []
     referenced_roots: List[str] = []
     referenced_files: Set[str] = set()
+    external_root_accessibility = inspect_external_root_accessibility(external_path_mappings)
 
     catalog_source_normalized = (catalog_source or "auto").lower()
     if catalog_source_normalized not in {"auto", "filesystem", "rest"}:
@@ -1057,7 +1267,13 @@ def inventory_stores(
     log_interval = 500 if len(included_stores) >= 1000 else 100
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_map = {
-            executor.submit(process_catalog_store, catalog_store, data_dir): catalog_store
+            executor.submit(
+                process_catalog_store,
+                catalog_store,
+                data_dir,
+                external_path_mappings,
+                external_root_accessibility,
+            ): catalog_store
             for catalog_store in included_stores
         }
         for future in as_completed(future_map):

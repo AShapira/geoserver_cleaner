@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -177,6 +178,207 @@ class GeoServerStoreReportTests(unittest.TestCase):
             orphan_rows = report.collect_orphans(data_root, referenced_roots, referenced_files)
             orphan_paths = [row["resolved_path"] for row in orphan_rows]
             self.assertFalse(any("excluded_ws" in path for path in orphan_paths))
+
+    def test_resolve_store_path_maps_windows_external_root_to_local_mount(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            external_root = os.path.join(temp_dir, "ext_osm")
+            os.makedirs(os.path.join(external_root, "roads"), exist_ok=True)
+            mappings = report.parse_external_path_mappings(
+                json.dumps({r"C:\data\osm": external_root})
+            )
+
+            resolved = report.resolve_store_path(
+                r"C:\data\osm\roads\roads.tif",
+                temp_dir,
+                external_path_mappings=mappings,
+            )
+
+            self.assertEqual(
+                resolved.resolved_path,
+                os.path.join(external_root, "roads", "roads.tif"),
+            )
+            self.assertIsNotNone(resolved.mapping)
+
+    def test_resolve_store_path_maps_unc_external_root_to_local_mount(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            external_root = os.path.join(temp_dir, "share_mount")
+            mappings = report.parse_external_path_mappings(
+                json.dumps({r"\\fileserver\gis": external_root})
+            )
+
+            resolved = report.resolve_store_path(
+                r"\\fileserver\gis\imagery\demo.tif",
+                temp_dir,
+                external_path_mappings=mappings,
+            )
+
+            self.assertEqual(
+                resolved.resolved_path,
+                os.path.join(external_root, "imagery", "demo.tif"),
+            )
+            self.assertIsNotNone(resolved.mapping)
+
+    def test_resolve_store_path_maps_posix_external_root_to_local_mount(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            external_root = os.path.join(temp_dir, "posix_mount")
+            mappings = report.parse_external_path_mappings(
+                json.dumps({"/srv/geodata": external_root})
+            )
+
+            resolved = report.resolve_store_path(
+                "/srv/geodata/vector/roads.gpkg",
+                temp_dir,
+                external_path_mappings=mappings,
+            )
+
+            self.assertEqual(
+                resolved.resolved_path,
+                os.path.join(external_root, "vector", "roads.gpkg"),
+            )
+            self.assertIsNotNone(resolved.mapping)
+
+    def test_resolve_store_path_prefers_longest_external_mapping_prefix(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base_mount = os.path.join(temp_dir, "base")
+            nested_mount = os.path.join(temp_dir, "nested")
+            mappings = report.parse_external_path_mappings(
+                json.dumps(
+                    {
+                        r"C:\data": base_mount,
+                        r"C:\data\osm": nested_mount,
+                    }
+                )
+            )
+
+            resolved = report.resolve_store_path(
+                r"C:\data\osm\roads\roads.tif",
+                temp_dir,
+                external_path_mappings=mappings,
+            )
+
+            self.assertEqual(
+                resolved.resolved_path,
+                os.path.join(nested_mount, "roads", "roads.tif"),
+            )
+
+    def test_resolve_store_path_keeps_data_relative_paths_internal(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            external_root = os.path.join(temp_dir, "ext_osm")
+            mappings = report.parse_external_path_mappings(
+                json.dumps({r"C:\data\osm": external_root})
+            )
+
+            resolved = report.resolve_store_path(
+                "file:data/ws/store.tif",
+                temp_dir,
+                external_path_mappings=mappings,
+            )
+
+            self.assertEqual(
+                resolved.resolved_path,
+                os.path.join(temp_dir, "data", "ws", "store.tif"),
+            )
+            self.assertIsNone(resolved.mapping)
+
+    def test_inventory_uses_external_path_mapping_for_scan_success(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            external_root = os.path.join(temp_dir, "ext_osm")
+            os.makedirs(external_root, exist_ok=True)
+            tif_path = os.path.join(external_root, "roads.tif")
+            with open(tif_path, "wb") as handle:
+                handle.write(b"mapped")
+
+            mappings = report.parse_external_path_mappings(
+                json.dumps({r"C:\data\osm": external_root})
+            )
+            def fake_list_store_refs(_client, _workspace, store_kind):
+                return ["roads"] if store_kind == "coveragestores" else []
+
+            with patch.object(report, "list_workspaces", return_value=["ws"]), patch.object(
+                report,
+                "list_store_refs",
+                side_effect=fake_list_store_refs,
+            ), patch.object(
+                report,
+                "get_store_detail",
+                return_value={"type": "GeoTIFF", "url": r"C:\data\osm\roads.tif"},
+            ), patch.object(
+                report,
+                "list_store_layers",
+                return_value=["roads"],
+            ):
+                rows, referenced_roots, referenced_files = report.inventory_stores(
+                    client=None,
+                    data_dir=temp_dir,
+                    excluded_workspaces=set(),
+                    external_path_mappings=mappings,
+                )
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["status"], "ok")
+            self.assertEqual(rows[0]["resolved_path"], tif_path)
+            self.assertFalse(referenced_roots)
+            self.assertIn(report.normalize_path(tif_path), referenced_files)
+
+    def test_inventory_marks_mapped_external_root_as_missing_when_inaccessible(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            inaccessible_root = os.path.join(temp_dir, "missing_mount")
+            mappings = report.parse_external_path_mappings(
+                json.dumps({r"C:\data\osm": inaccessible_root})
+            )
+            def fake_list_store_refs(_client, _workspace, store_kind):
+                return ["roads"] if store_kind == "coveragestores" else []
+
+            with patch.object(report, "list_workspaces", return_value=["ws"]), patch.object(
+                report,
+                "list_store_refs",
+                side_effect=fake_list_store_refs,
+            ), patch.object(
+                report,
+                "get_store_detail",
+                return_value={"type": "GeoTIFF", "url": r"C:\data\osm\roads.tif"},
+            ), patch.object(
+                report,
+                "list_store_layers",
+                return_value=["roads"],
+            ):
+                rows, _referenced_roots, _referenced_files = report.inventory_stores(
+                    client=None,
+                    data_dir=temp_dir,
+                    excluded_workspaces=set(),
+                    external_path_mappings=mappings,
+                )
+
+            self.assertEqual(rows[0]["status"], "missing")
+            self.assertIn("is not accessible from the current runtime", rows[0]["notes"])
+            self.assertIn(inaccessible_root, rows[0]["notes"])
+
+    def test_inventory_keeps_unmapped_external_store_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            def fake_list_store_refs(_client, _workspace, store_kind):
+                return ["roads"] if store_kind == "coveragestores" else []
+
+            with patch.object(report, "list_workspaces", return_value=["ws"]), patch.object(
+                report,
+                "list_store_refs",
+                side_effect=fake_list_store_refs,
+            ), patch.object(
+                report,
+                "get_store_detail",
+                return_value={"type": "GeoTIFF", "url": r"C:\data\osm\roads.tif"},
+            ), patch.object(
+                report,
+                "list_store_layers",
+                return_value=["roads"],
+            ):
+                rows, _referenced_roots, _referenced_files = report.inventory_stores(
+                    client=None,
+                    data_dir=temp_dir,
+                    excluded_workspaces=set(),
+                )
+
+            self.assertEqual(rows[0]["status"], "missing")
+            self.assertEqual(rows[0]["notes"], "Resolved path does not exist on disk.")
 
     def test_html_report_is_generated_with_sorting_ui(self):
         rows = [
