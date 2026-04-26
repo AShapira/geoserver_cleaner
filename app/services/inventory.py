@@ -13,7 +13,9 @@ from app.reporting.core import (
     CatalogStore,
     ExternalPathMapping,
     GeoServerClient,
+    append_store_layer_group_warnings,
     build_error_row,
+    collect_layer_group_memberships,
     collect_orphans,
     collect_rest_catalog,
     inspect_external_root_accessibility,
@@ -129,6 +131,11 @@ def collect_inventory_rows(
             progress_callback=on_discovery_progress,
         )
 
+    append_store_layer_group_warnings(
+        catalog_stores,
+        collect_layer_group_memberships(client, workspace_names),
+    )
+
     rows.extend(rest_error_rows)
     for workspace in workspace_names:
         if workspace.lower() in excluded_workspaces:
@@ -219,7 +226,12 @@ def collect_inventory_rows(
             "Calculating orphaned data",
         )
 
-    for orphan_row in collect_orphans(data_root, referenced_roots, referenced_files):
+    for orphan_row in collect_orphans(
+        data_root,
+        referenced_roots,
+        referenced_files,
+        small_file_threshold_bytes=settings.orphan_small_file_threshold_bytes,
+    ):
         orphan_row["store_kind"] = ""
         orphan_row["normalized_path"] = (
             normalize_path(orphan_row.get("resolved_path", "")) if orphan_row.get("resolved_path") else ""

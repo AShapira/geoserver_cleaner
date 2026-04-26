@@ -49,6 +49,24 @@ class SettingsConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "must be a JSON object"):
                     Settings.from_env()
 
+    def test_orphan_small_file_threshold_default_and_override(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_updates = {
+                "APP_DATABASE_PATH": os.path.join(temp_dir, "geoserver_cleaner.sqlite3"),
+                "GEOSERVER_DATA_DIR": temp_dir,
+            }
+            with patch.dict(os.environ, env_updates, clear=True):
+                default_settings = Settings.from_env()
+            with patch.dict(
+                os.environ,
+                {**env_updates, "APP_ORPHAN_SMALL_FILE_THRESHOLD_BYTES": "2048"},
+                clear=True,
+            ):
+                override_settings = Settings.from_env()
+
+        self.assertEqual(default_settings.orphan_small_file_threshold_bytes, 102400)
+        self.assertEqual(override_settings.orphan_small_file_threshold_bytes, 2048)
+
 
 if __name__ == "__main__":
     unittest.main()

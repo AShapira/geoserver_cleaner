@@ -75,6 +75,8 @@ RASTER_STEM_SUFFIXES = {
     ".tab",
 }
 
+DEFAULT_ORPHAN_SMALL_FILE_THRESHOLD_BYTES = 100 * 1024
+
 LOGGER = logging.getLogger("geoserver_cleaner.reporting")
 
 WINDOWS_ABSOLUTE_RE = re.compile(r"^[a-zA-Z]:[\\/]")
@@ -310,6 +312,10 @@ def as_list(value) -> List[dict]:
     return [value]
 
 
+def join_notes(*parts: str) -> str:
+    return " ".join(str(part).strip() for part in parts if str(part or "").strip())
+
+
 def entries_to_dict(entries) -> Dict[str, str]:
     params: Dict[str, str] = {}
     for entry in as_list(entries):
@@ -435,6 +441,110 @@ def get_store_detail(
     if not isinstance(detail, dict):
         raise RuntimeError("Unexpected store detail payload type for {}".format(store_name))
     return detail
+
+
+def list_layer_group_refs(client: GeoServerClient, workspace: str = "") -> List[str]:
+    if workspace:
+        endpoint = "rest/workspaces/{}/layergroups.json".format(quote(workspace, safe=""))
+    else:
+        endpoint = "rest/layergroups.json"
+    payload = client.get_json(endpoint)
+    container = payload.get("layerGroups")
+    if not isinstance(container, dict):
+        return []
+    items = container.get("layerGroup")
+    names = []
+    for item in as_list(items):
+        if isinstance(item, dict) and item.get("name"):
+            names.append(str(item["name"]))
+    return sorted(set(names))
+
+
+def get_layer_group_detail(client: GeoServerClient, group_name: str, workspace: str = "") -> dict:
+    group_q = quote(group_name, safe="")
+    if workspace:
+        endpoint = "rest/workspaces/{}/layergroups/{}.json".format(
+            quote(workspace, safe=""),
+            group_q,
+        )
+    else:
+        endpoint = "rest/layergroups/{}.json".format(group_q)
+    payload = client.get_json(endpoint)
+    detail = payload.get("layerGroup", {})
+    if not isinstance(detail, dict):
+        raise RuntimeError("Unexpected layer group payload type for {}".format(group_name))
+    return detail
+
+
+def _layer_group_layer_names(detail: dict) -> List[str]:
+    layers = detail.get("layers")
+    if not isinstance(layers, dict):
+        return []
+    names: List[str] = []
+    for item in as_list(layers.get("layer")):
+        if isinstance(item, str):
+            if item.strip():
+                names.append(item.strip())
+        elif isinstance(item, dict):
+            value = item.get("name") or item.get("$") or item.get("#text")
+            if value:
+                names.append(str(value).strip())
+    return sorted(set(name for name in names if name))
+
+
+def collect_layer_group_memberships(
+    client: Optional[GeoServerClient],
+    workspaces: Sequence[str],
+) -> Dict[str, List[str]]:
+    if client is None:
+        return {}
+
+    memberships: Dict[str, Set[str]] = {}
+
+    def add_group(group_label: str, detail: dict) -> None:
+        for layer_name in _layer_group_layer_names(detail):
+            memberships.setdefault(layer_name, set()).add(group_label)
+            if ":" in layer_name:
+                memberships.setdefault(layer_name.split(":", 1)[1], set()).add(group_label)
+
+    try:
+        for group_name in list_layer_group_refs(client):
+            add_group(group_name, get_layer_group_detail(client, group_name))
+        for workspace in sorted(set(workspaces), key=lambda value: value.lower()):
+            for group_name in list_layer_group_refs(client, workspace):
+                add_group(
+                    "{}/{}".format(workspace, group_name),
+                    get_layer_group_detail(client, group_name, workspace),
+                )
+    except Exception as exc:
+        LOGGER.warning("Failed to collect layer group memberships: %s", exc)
+        return {}
+
+    return {layer_name: sorted(groups) for layer_name, groups in memberships.items()}
+
+
+def append_store_layer_group_warnings(
+    catalog_stores: Sequence[CatalogStore],
+    layer_group_memberships: Dict[str, List[str]],
+) -> None:
+    if not layer_group_memberships:
+        return
+    for catalog_store in catalog_stores:
+        layer_names = [
+            item.strip()
+            for item in (catalog_store.layer_names or "").split(",")
+            if item.strip()
+        ]
+        group_names: Set[str] = set()
+        for layer_name in layer_names:
+            group_names.update(layer_group_memberships.get(layer_name, []))
+            group_names.update(layer_group_memberships.get("{}:{}".format(catalog_store.workspace, layer_name), []))
+        if not group_names:
+            continue
+        warning = "Warning: layer(s) are used by layer group(s): {}.".format(
+            ", ".join(sorted(group_names, key=lambda value: value.lower()))
+        )
+        catalog_store.notes = join_notes(catalog_store.notes, warning)
 
 
 def list_store_layers(
@@ -805,10 +915,15 @@ def collect_orphans(
     data_root: str,
     referenced_roots: Sequence[str],
     referenced_files: Set[str],
+    small_file_threshold_bytes: int = DEFAULT_ORPHAN_SMALL_FILE_THRESHOLD_BYTES,
 ) -> List[dict]:
     orphan_rows: List[dict] = []
     referenced_file_set = {normalize_path(item) for item in referenced_files}
     normalized_roots = [normalize_path(item) for item in referenced_roots]
+    small_file_threshold_bytes = max(int(small_file_threshold_bytes or 0), 0)
+
+    def should_emit_directory(size_bytes: int, file_count: int) -> bool:
+        return size_bytes > 0 and file_count > 0
 
     def visit_dir(path: str) -> Tuple[bool, int, int]:
         normalized = normalize_path(path)
@@ -849,7 +964,7 @@ def collect_orphans(
                 total_count += child_count
                 if child_has_ref:
                     has_referenced = True
-                else:
+                elif should_emit_directory(child_size, child_count):
                     orphan_children.append(
                         build_row(
                             row_kind="orphaned",
@@ -870,6 +985,8 @@ def collect_orphans(
                 try:
                     stat = entry.stat(follow_symlinks=False)
                 except OSError:
+                    continue
+                if stat.st_size < small_file_threshold_bytes:
                     continue
                 total_size += stat.st_size
                 total_count += 1
@@ -926,7 +1043,7 @@ def collect_orphans(
             if path_under_any_root(path, normalized_roots):
                 continue
             has_referenced, total_size, total_count = visit_dir(path)
-            if not has_referenced:
+            if not has_referenced and should_emit_directory(total_size, total_count):
                 orphan_rows.append(
                     build_row(
                         row_kind="orphaned",
@@ -949,6 +1066,8 @@ def collect_orphans(
                 try:
                     stat = entry.stat(follow_symlinks=False)
                 except OSError:
+                    continue
+                if stat.st_size < small_file_threshold_bytes:
                     continue
                 orphan_rows.append(
                     build_row(
@@ -1141,7 +1260,10 @@ def process_catalog_store(
                 size_bytes=0,
                 file_count=0,
                 status="unresolved",
-                notes="Could not find a usable filesystem path in store configuration.",
+                notes=join_notes(
+                    "Could not find a usable filesystem path in store configuration.",
+                    catalog_store.notes,
+                ),
             )
         )
 
@@ -1163,8 +1285,11 @@ def process_catalog_store(
                 size_bytes=0,
                 file_count=0,
                 status="missing",
-                notes="Mapped external root '{}' is not accessible from the current runtime.".format(
-                    resolved.mapping.cleaner_root
+                notes=join_notes(
+                    "Mapped external root '{}' is not accessible from the current runtime.".format(
+                        resolved.mapping.cleaner_root
+                    ),
+                    catalog_store.notes,
                 ),
             )
         )
@@ -1183,7 +1308,7 @@ def process_catalog_store(
                 size_bytes=0,
                 file_count=0,
                 status="missing",
-                notes="Resolved path does not exist on disk.",
+                notes=join_notes("Resolved path does not exist on disk.", catalog_store.notes),
             )
         )
 
@@ -1202,7 +1327,7 @@ def process_catalog_store(
             size_bytes=scan.size_bytes,
             file_count=scan.file_count,
             status="ok",
-            notes="",
+            notes=catalog_store.notes,
         ),
         referenced_root=normalize_path(resolved_path) if path_kind == "directory" else "",
         referenced_files=scan.referenced_files if path_kind == "file" else set(),
@@ -1245,6 +1370,11 @@ def inventory_stores(
             rows = []
     else:
         workspace_names, catalog_stores, rows = collect_rest_catalog(client, data_dir)
+
+    append_store_layer_group_warnings(
+        catalog_stores,
+        collect_layer_group_memberships(client, workspace_names),
+    )
 
     for workspace in workspace_names:
         if workspace.lower() in excluded_workspaces:

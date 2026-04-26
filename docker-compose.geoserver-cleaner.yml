@@ -19,6 +19,7 @@ services:
       APP_LOG_PATH: ${APP_LOG_PATH:-/app_data/logs/geoserver_cleaner.log}
       APP_LOG_MAX_BYTES: ${APP_LOG_MAX_BYTES:-10485760}
       APP_LOG_BACKUP_COUNT: ${APP_LOG_BACKUP_COUNT:-5}
+      APP_ORPHAN_SMALL_FILE_THRESHOLD_BYTES: ${APP_ORPHAN_SMALL_FILE_THRESHOLD_BYTES:-102400}
     volumes:
       - ./geoserver_test/geoserver_data:/geoserver_data
       # Example for external stores:

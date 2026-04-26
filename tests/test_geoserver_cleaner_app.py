@@ -323,6 +323,54 @@ class GeoServerCleanerAppTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertIn("GeoServer will delete store configuration only; path is unresolved or missing.", response.text)
 
+    def test_delete_preview_explains_geopackage_datastore_semantics(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            gpkg_path = os.path.join(temp_dir, "data", "vector", "demo.gpkg")
+            os.makedirs(os.path.dirname(gpkg_path), exist_ok=True)
+            with open(gpkg_path, "wb") as handle:
+                handle.write(b"gpkg")
+            module = self.load_app(temp_dir)
+            run_id = self.seed_run(
+                module,
+                [
+                    self.make_row(
+                        temp_dir,
+                        store_kind="datastores",
+                        store_type="GeoPackage",
+                        layer_names="roads, buildings",
+                        configured_path=gpkg_path,
+                        resolved_path=gpkg_path,
+                        normalized_path=os.path.normcase(os.path.normpath(gpkg_path)),
+                    )
+                ],
+            )
+            row = module.db.get_run_rows(module.SETTINGS.database_path, run_id)[0]
+            with TestClient(module.app) as client:
+                response = client.post("/delete/preview", data={"selected_ids": str(row["id"])})
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("0 internal data path(s)", response.text)
+                self.assertIn("configured feature types/layers", response.text)
+                self.assertIn("unrelated tables in the same .gpkg are not deleted by this app", response.text)
+
+    def test_delete_preview_shows_layer_group_remarks(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            module = self.load_app(temp_dir)
+            run_id = self.seed_run(
+                module,
+                [
+                    self.make_row(
+                        temp_dir,
+                        notes="Warning: layer(s) are used by layer group(s): global_group.",
+                    )
+                ],
+            )
+            row = module.db.get_run_rows(module.SETTINGS.database_path, run_id)[0]
+            with TestClient(module.app) as client:
+                response = client.post("/delete/preview", data={"selected_ids": str(row["id"])})
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("Remarks", response.text)
+                self.assertIn("global_group", response.text)
+
     def test_orphan_rows_cannot_be_deleted(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             os.makedirs(os.path.join(temp_dir, "data"), exist_ok=True)
@@ -413,7 +461,11 @@ class GeoServerCleanerAppTests(unittest.TestCase):
                 ],
             )
             row = module.db.get_run_rows(module.SETTINGS.database_path, run_id)[0]
-            with patch.object(module.deletion.geoserver, "delete_store", return_value=None):
+            with patch.object(module.deletion.geoserver, "delete_store", return_value=None), patch.object(
+                module.deletion.geoserver,
+                "store_exists",
+                return_value=False,
+            ):
                 result = module.deletion.execute_delete_job(
                     module.SETTINGS.database_path,
                     module.SETTINGS,
@@ -422,7 +474,37 @@ class GeoServerCleanerAppTests(unittest.TestCase):
                 )
             self.assertTrue(os.path.exists(data_path))
             self.assertEqual(result["deleted_count"], 1)
+            self.assertEqual(result["verified_deleted_count"], 1)
+            self.assertEqual(result["snapshot_rows_removed"], 1)
             self.assertEqual(result["delete_data_count"], 1)
+            self.assertEqual(module.db.get_run_rows(module.SETTINGS.database_path, run_id), [])
+            run = module.db.get_run(module.SETTINGS.database_path, run_id)
+            self.assertEqual(int(run["store_count"]), 0)
+            self.assertEqual(int(run["tracked_size_bytes"]), 0)
+
+    def test_execute_delete_job_keeps_row_when_verification_is_inconclusive(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            os.makedirs(os.path.join(temp_dir, "data", "raster"), exist_ok=True)
+            module = self.load_app(temp_dir)
+            run_id = self.seed_run(module, [self.make_row(temp_dir)])
+            row = module.db.get_run_rows(module.SETTINGS.database_path, run_id)[0]
+            with patch.object(module.deletion.geoserver, "delete_store", return_value=None), patch.object(
+                module.deletion.geoserver,
+                "store_exists",
+                return_value=True,
+            ):
+                result = module.deletion.execute_delete_job(
+                    module.SETTINGS.database_path,
+                    module.SETTINGS,
+                    run_id,
+                    [int(row["id"])],
+                )
+
+            self.assertEqual(result["deleted_count"], 1)
+            self.assertEqual(result["verified_deleted_count"], 0)
+            self.assertEqual(result["snapshot_rows_removed"], 0)
+            self.assertEqual(result["verification_failed_count"], 1)
+            self.assertEqual(len(module.db.get_run_rows(module.SETTINGS.database_path, run_id)), 1)
 
     def test_scan_route_passes_excluded_workspaces_to_job_manager(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -503,7 +585,7 @@ class GeoServerCleanerAppTests(unittest.TestCase):
             job_id = module.db.create_job(
                 module.SETTINGS.database_path,
                 "delete",
-                "Delete job completed and inventory refreshed",
+                "Delete completed; snapshot rows updated; run full scan to refresh orphan data",
                 metadata={
                     "phase": "completed",
                     "deleted_count": 47,
@@ -517,7 +599,7 @@ class GeoServerCleanerAppTests(unittest.TestCase):
                 module.SETTINGS.database_path,
                 job_id,
                 status="completed",
-                message="Delete job completed and inventory refreshed",
+                message="Delete completed; snapshot rows updated; run full scan to refresh orphan data",
                 finished=True,
             )
             with TestClient(module.app) as client:
@@ -627,7 +709,7 @@ class GeoServerCleanerAppTests(unittest.TestCase):
                 self.assertIn("GeoServer Cleaner Report", response.text)
                 self.assertIn("demo", response.text)
 
-    def test_geoserver_delete_uses_recurse_and_purge_all(self):
+    def test_geoserver_delete_uses_recurse_and_purge_all_for_coverage_stores(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             module = self.load_app(temp_dir)
             dummy_client = DummyClient("http://example.test/geoserver/", module.SETTINGS.timeout)
@@ -645,6 +727,25 @@ class GeoServerCleanerAppTests(unittest.TestCase):
             self.assertIsNotNone(dummy_client.opener.request)
             self.assertIn("recurse=true", dummy_client.opener.request.full_url)
             self.assertIn("purge=all", dummy_client.opener.request.full_url)
+
+    def test_geoserver_delete_uses_recurse_only_for_datastores(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            module = self.load_app(temp_dir)
+            dummy_client = DummyClient("http://example.test/geoserver/", module.SETTINGS.timeout)
+            with patch.object(
+                module.deletion.geoserver,
+                "GeoServerClient",
+                return_value=dummy_client,
+            ):
+                module.deletion.geoserver.delete_store(
+                    module.SETTINGS,
+                    "vector",
+                    "datastores",
+                    "demo store",
+                )
+            self.assertIsNotNone(dummy_client.opener.request)
+            self.assertIn("recurse=true", dummy_client.opener.request.full_url)
+            self.assertNotIn("purge=all", dummy_client.opener.request.full_url)
 
 
 if __name__ == "__main__":

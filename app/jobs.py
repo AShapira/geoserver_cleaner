@@ -218,47 +218,13 @@ class JobManager:
                 store_ids,
                 progress_callback=on_delete_progress,
             )
-            db.update_job(
-                self.db_path,
-                job_id,
-                status="running",
-                message="Delete completed. Refreshing inventory snapshot",
-                metadata={**base_metadata, **result, "phase": "refresh_queued"},
-            )
-
-            def on_refresh_progress(metadata: dict, message: str) -> None:
-                merged = dict(base_metadata)
-                merged.update(result)
-                merged.update(metadata)
-                if metadata.get("phase") == "stores":
-                    merged["phase"] = "refresh_stores"
-                elif metadata.get("phase") == "orphans":
-                    merged["phase"] = "refresh_orphans"
-                try:
-                    db.update_job(
-                        self.db_path,
-                        job_id,
-                        status="running",
-                        message=message,
-                        metadata=merged,
-                    )
-                except Exception as exc:
-                    LOGGER.warning("Delete job %s refresh update failed: %s", job_id, exc)
-
-            refreshed_run_id = inventory.run_inventory_scan(
-                self.settings,
-                self.db_path,
-                excluded_workspaces_raw=excluded_workspaces_raw,
-                progress_callback=on_refresh_progress,
-            )
             metadata = dict(result)
-            metadata["refreshed_run_id"] = refreshed_run_id
             db.update_job(
                 self.db_path,
                 job_id,
                 status="completed",
-                message="Delete job completed and inventory refreshed",
-                run_id=refreshed_run_id,
+                message="Delete completed; snapshot rows updated; run full scan to refresh orphan data",
+                run_id=run_id,
                 metadata={**base_metadata, **metadata, "phase": "completed", "eta_seconds": 0},
                 finished=True,
             )
@@ -268,8 +234,9 @@ class JobManager:
                     "event": "job_delete_completed",
                     "job_id": job_id,
                     "run_id": run_id,
-                    "refreshed_run_id": refreshed_run_id,
                     "deleted_count": metadata.get("deleted_count", 0),
+                    "verified_deleted_count": metadata.get("verified_deleted_count", 0),
+                    "snapshot_rows_removed": metadata.get("snapshot_rows_removed", 0),
                     "failed_count": metadata.get("failed_count", 0),
                 },
             )

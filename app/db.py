@@ -403,6 +403,50 @@ def get_path_owners(db_path: str, run_id: int, normalized_paths: Sequence[str]) 
     return result
 
 
+def remove_store_rows_and_recalculate(db_path: str, run_id: int, store_ids: Sequence[int]) -> int:
+    store_ids = sorted(set(int(item) for item in store_ids))
+    if not store_ids:
+        return 0
+    placeholders = ", ".join("?" for _ in store_ids)
+    with managed_connection(db_path) as connection:
+        cursor = connection.execute(
+            """
+            DELETE FROM stores
+            WHERE run_id = ? AND row_kind = 'store' AND id IN ({})
+            """.format(placeholders),
+            [run_id, *store_ids],
+        )
+        deleted_count = int(cursor.rowcount or 0)
+        summary = connection.execute(
+            """
+            SELECT
+                SUM(CASE WHEN row_kind = 'store' THEN 1 ELSE 0 END) AS store_count,
+                SUM(CASE WHEN row_kind = 'orphaned' THEN 1 ELSE 0 END) AS orphan_count,
+                SUM(CASE WHEN row_kind = 'store' AND status <> 'ok' THEN 1 ELSE 0 END) AS issue_count,
+                SUM(CASE WHEN row_kind = 'store' AND status = 'ok' THEN size_bytes ELSE 0 END) AS tracked_size_bytes
+            FROM stores
+            WHERE run_id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+        connection.execute(
+            """
+            UPDATE inventory_runs
+            SET store_count = ?, orphan_count = ?, issue_count = ?, tracked_size_bytes = ?, finished_at = ?
+            WHERE id = ?
+            """,
+            (
+                int(summary["store_count"] or 0),
+                int(summary["orphan_count"] or 0),
+                int(summary["issue_count"] or 0),
+                int(summary["tracked_size_bytes"] or 0),
+                utc_now(),
+                run_id,
+            ),
+        )
+    return deleted_count
+
+
 def add_audit_event(db_path: str, event_type: str, payload: dict) -> None:
     with managed_connection(db_path) as connection:
         connection.execute(

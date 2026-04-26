@@ -25,7 +25,7 @@ The project is designed for installations where GeoServer contains many file-bas
 - detect orphaned files and directories under `data_dir/data`
 - filter, sort, and review stores in the web UI
 - preview store deletion before execution
-- delete stores through GeoServer REST with `recurse=true&purge=all`
+- delete stores through GeoServer REST with `recurse=true`
 - distinguish between:
   - stores with data inside `data_dir`
   - stores with data outside `data_dir`
@@ -70,7 +70,7 @@ Current workflow:
 3. filter and select stores
 4. inspect the delete preview
 5. execute a delete job
-6. review the refreshed snapshot
+6. review the updated snapshot rows, then run a full scan when orphan data must be refreshed
 
 Implemented UI capabilities:
 
@@ -194,6 +194,7 @@ Optional:
 - `APP_LOG_PATH`
 - `APP_LOG_MAX_BYTES`
 - `APP_LOG_BACKUP_COUNT`
+- `APP_ORPHAN_SMALL_FILE_THRESHOLD_BYTES`
 
 External path mappings:
 
@@ -223,6 +224,12 @@ Logging:
 - if `APP_LOG_PATH` is not set, the app writes to `logs/geoserver_cleaner.log` beside the SQLite database path
 - `APP_LOG_MAX_BYTES` controls rotation size per file
 - `APP_LOG_BACKUP_COUNT` controls how many rotated files are retained
+
+Orphan filtering:
+
+- empty directories are not shown as orphan rows
+- orphan files smaller than `APP_ORPHAN_SMALL_FILE_THRESHOLD_BYTES` are hidden
+- default threshold is `102400` bytes (`100 KB`)
 
 ## Docker
 
@@ -297,13 +304,13 @@ docker compose -f docker-compose.production.yml up -d
 
 Notes:
 
-- the default image tag is the latest tagged release currently in this repo: `2.6.0`
+- the default image tag is the latest tagged release currently in this repo: `2.7.0`
 - override it with `GEOSERVER_CLEANER_TAG` when a newer release is published
 - if the package is private, run `docker login ghcr.io` before `docker compose up`
 
 Local production flow against the repo test fixture:
 
-- use [`.env.production.local`](c:/Alex/work/geoserver_cleaner/.env.production.local) for a local `2.6.0` image run wired to [geoserver_test/geoserver_data](c:/Alex/work/geoserver_cleaner/geoserver_test/geoserver_data)
+- use [`.env.production.local`](c:/Alex/work/geoserver_cleaner/.env.production.local) for a local `2.7.0` image run wired to [geoserver_test/geoserver_data](c:/Alex/work/geoserver_cleaner/geoserver_test/geoserver_data)
 - start both the GeoServer fixture and the production app with [`scripts/run-local-production.ps1`](c:/Alex/work/geoserver_cleaner/scripts/run-local-production.ps1)
 
 ```powershell
@@ -327,7 +334,7 @@ Published-image validation:
 - use [`scripts/validate-ghcr-image.ps1`](c:/Alex/work/geoserver_cleaner/scripts/validate-ghcr-image.ps1) to pull a published GHCR image tag, run it with the production compose file, exercise the app over HTTP, and write a Markdown validation report to `TASK_EXECUTION_REPORT.md`
 
 ```powershell
-.\scripts\validate-ghcr-image.ps1 -ImageTag 2.6.0
+.\scripts\validate-ghcr-image.ps1 -ImageTag 2.7.0
 ```
 
 VS Code workspace MCP config for that flow lives in [`.vscode/mcp.json`](c:/Alex/work/geoserver_cleaner/.vscode/mcp.json).
@@ -386,9 +393,11 @@ Store deletion is GeoServer-managed, not filesystem-managed by this application.
 The delete preview and MCP delete tool distinguish between:
 
 - internal data
-  GeoServer can remove store configuration and internal data
+  GeoServer can remove store configuration and, for coverage stores, internal data when its reader supports purge
 - external or unresolved data
   GeoServer removes store configuration only
+
+Datastore deletion uses GeoServer `recurse=true` to remove configured feature types and layers. For GeoPackage datastores, this means configured layers in that datastore are removed from GeoServer; unrelated tables in the same `.gpkg` are not directly deleted by this application.
 
 External path mappings do not change delete semantics:
 

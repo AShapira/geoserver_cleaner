@@ -35,6 +35,16 @@ def _int_env(name: str, default: int) -> int:
     return value
 
 
+def _nonnegative_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    value = int(raw)
+    if value < 0:
+        raise ValueError("{} must be greater than or equal to 0.".format(name))
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     geoserver_url: str
@@ -58,6 +68,7 @@ class Settings:
     app_log_path: str
     app_log_max_bytes: int
     app_log_backup_count: int
+    orphan_small_file_threshold_bytes: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -93,6 +104,7 @@ class Settings:
             app_log_path=os.path.abspath(os.getenv("APP_LOG_PATH", default_log_path(database_path))),
             app_log_max_bytes=_int_env("APP_LOG_MAX_BYTES", 10 * 1024 * 1024),
             app_log_backup_count=_int_env("APP_LOG_BACKUP_COUNT", 5),
+            orphan_small_file_threshold_bytes=_nonnegative_int_env("APP_ORPHAN_SMALL_FILE_THRESHOLD_BYTES", 100 * 1024),
         )
 
     @property

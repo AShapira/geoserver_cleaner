@@ -20,7 +20,9 @@ class DeletePlanItem:
     store_name: str
     store_type: str
     store_kind: str
+    layer_names: str
     status: str
+    remarks: str
     resolved_path: str
     normalized_path: str
     can_delete_store: bool
@@ -79,6 +81,8 @@ def build_delete_preview(
         resolved_path = str(row["resolved_path"] or "")
         store_kind = str(row["store_kind"] or "")
         path_kind = str(row["path_kind"] or "")
+        store_type = str(row["store_type"] or "")
+        remarks = str(row["notes"] or "")
 
         if row["row_kind"] != "store":
             can_delete_store = False
@@ -108,8 +112,20 @@ def build_delete_preview(
                     )
                 else:
                     data_scope = "internal"
-                    can_delete_data = True
-                    reason_parts.append("GeoServer will delete store configuration and internal data.")
+                    if store_kind == "datastores":
+                        can_delete_data = False
+                        reason_parts.append(
+                            "GeoServer will delete the datastore and configured feature types/layers with recurse=true."
+                        )
+                    else:
+                        can_delete_data = True
+                        reason_parts.append("GeoServer will delete store configuration and internal data.")
+
+            if store_kind == "datastores" and "geopackage" in store_type.lower():
+                reason_parts.append(
+                    "For GeoPackage stores, configured feature types/layers in this datastore are removed; "
+                    "unrelated tables in the same .gpkg are not deleted by this app."
+                )
 
         if can_delete_data and resolved_path:
             delete_paths.append(resolved_path)
@@ -119,9 +135,11 @@ def build_delete_preview(
                 store_id=int(row["id"]),
                 workspace=str(row["workspace"]),
                 store_name=str(row["store_name"]),
-                store_type=str(row["store_type"]),
+                store_type=store_type,
                 store_kind=store_kind,
+                layer_names=str(row["layer_names"] or ""),
                 status=str(row["status"]),
+                remarks=remarks,
                 resolved_path=resolved_path,
                 normalized_path=normalized_path,
                 can_delete_store=can_delete_store,
@@ -134,8 +152,9 @@ def build_delete_preview(
     if not items:
         warnings.append("No valid stores were selected.")
     else:
-        warnings.append("GeoServer REST deletion is always used with recurse=true and purge=all.")
-        warnings.append("Delete Data = Yes means GeoServer can purge data inside data_dir for that store.")
+        warnings.append("GeoServer REST deletion is always used; store rows are removed only after verification.")
+        warnings.append("Coverage store deletion uses purge=all; datastore deletion uses recurse=true.")
+        warnings.append("Delete Data = Yes means GeoServer can purge internal coverage-store data inside data_dir.")
         warnings.append("Delete Data = No means store deletion is configuration-only or the data ownership is uncertain.")
 
     unique_paths = sorted(set(delete_paths), key=lambda value: value.lower())
@@ -171,7 +190,9 @@ def execute_delete_job(
     preview = build_delete_preview(db_path, settings, run_id, store_ids)
     items: List[DeletePlanItem] = preview["items"]
     deleted_store_keys: List[str] = []
+    verified_deleted_ids: List[int] = []
     failed_items: List[str] = []
+    verification_failed_items: List[str] = []
     total_items = len(items)
     LOGGER.info(
         "Executing delete job",
@@ -214,6 +235,28 @@ def execute_delete_job(
             try:
                 geoserver.delete_store(settings, item.workspace, item.store_kind, item.store_name)
                 deleted_store_keys.append("{}/{}".format(item.workspace, item.store_name))
+                try:
+                    if geoserver.store_exists(settings, item.workspace, item.store_kind, item.store_name):
+                        verification_failed_items.append(
+                            "{} / {}: store still exists after delete request".format(
+                                item.workspace,
+                                item.store_name,
+                            )
+                        )
+                    else:
+                        verified_deleted_ids.append(item.store_id)
+                except Exception as exc:
+                    verification_failed_items.append("{} / {}: {}".format(item.workspace, item.store_name, exc))
+                    LOGGER.exception(
+                        "Delete item verification failed",
+                        extra={
+                            "event": "delete_item_verify_failed",
+                            "run_id": run_id,
+                            "workspace": item.workspace,
+                            "store_name": item.store_name,
+                            "store_kind": item.store_kind,
+                        },
+                    )
             except Exception as exc:
                 failed_items.append("{} / {}: {}".format(item.workspace, item.store_name, exc))
                 LOGGER.exception(
@@ -247,17 +290,26 @@ def execute_delete_job(
             "run_id": run_id,
             "selected_store_ids": list(store_ids),
             "deleted_stores": deleted_store_keys,
-            "purge_candidate_paths": preview["delete_paths"],
-            "failed_items": failed_items,
-        },
-    )
+                "purge_candidate_paths": preview["delete_paths"],
+                "failed_items": failed_items,
+                "verified_deleted_store_ids": verified_deleted_ids,
+                "verification_failed_items": verification_failed_items,
+            },
+        )
+
+    snapshot_rows_removed = db.remove_store_rows_and_recalculate(db_path, run_id, verified_deleted_ids)
     result = {
         "deleted_stores": deleted_store_keys,
         "deleted_count": len(deleted_store_keys),
+        "verified_deleted_store_ids": verified_deleted_ids,
+        "verified_deleted_count": len(verified_deleted_ids),
+        "snapshot_rows_removed": snapshot_rows_removed,
         "delete_data_count": int(preview["delete_data_count"]),
         "purge_candidate_paths": list(preview["delete_paths"]),
         "failed_items": failed_items,
         "failed_count": len(failed_items),
+        "verification_failed_items": verification_failed_items,
+        "verification_failed_count": len(verification_failed_items),
         "processed_delete_items": total_items,
         "total_delete_items": total_items,
         "remaining_delete_items": 0,
@@ -268,7 +320,9 @@ def execute_delete_job(
             "event": "delete_execute_complete",
             "run_id": run_id,
             "deleted_count": result["deleted_count"],
+            "verified_deleted_count": result["verified_deleted_count"],
             "failed_count": result["failed_count"],
+            "verification_failed_count": result["verification_failed_count"],
             "delete_data_count": result["delete_data_count"],
         },
     )

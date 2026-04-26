@@ -53,6 +53,88 @@ class GeoServerStoreReportTests(unittest.TestCase):
             self.assertFalse(referenced_roots)
             self.assertIn(report.normalize_path(tif_path), referenced_files)
 
+    def test_layer_group_membership_adds_store_warning(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = os.path.join(temp_dir, "data")
+            workspaces_root = os.path.join(temp_dir, "workspaces")
+            raster_dir = os.path.join(data_root, "fast_ws", "raster")
+            store_dir = os.path.join(workspaces_root, "fast_ws", "fast_store")
+            coverage_dir = os.path.join(store_dir, "fast_store")
+            os.makedirs(raster_dir, exist_ok=True)
+            os.makedirs(coverage_dir, exist_ok=True)
+
+            tif_path = os.path.join(raster_dir, "fast_store.tif")
+            with open(tif_path, "wb") as handle:
+                handle.write(b"mock")
+            with open(os.path.join(workspaces_root, "fast_ws", "workspace.xml"), "w", encoding="utf-8") as handle:
+                handle.write("<workspace><name>fast_ws</name></workspace>")
+            with open(os.path.join(store_dir, "coveragestore.xml"), "w", encoding="utf-8") as handle:
+                handle.write(
+                    "<coverageStore><name>fast_store</name><type>GeoTIFF</type>"
+                    "<url>file:data/fast_ws/raster/fast_store.tif</url></coverageStore>"
+                )
+            with open(os.path.join(coverage_dir, "coverage.xml"), "w", encoding="utf-8") as handle:
+                handle.write("<coverage><name>fast_layer</name></coverage>")
+
+            def fake_group_refs(_client, workspace=""):
+                return ["global_group"] if not workspace else ["workspace_group"]
+
+            def fake_group_detail(_client, group_name, workspace=""):
+                if workspace:
+                    return {"layers": {"layer": [{"name": "fast_ws:fast_layer"}]}}
+                return {"layers": {"layer": [{"name": "fast_layer"}]}}
+
+            with patch.object(report, "list_layer_group_refs", side_effect=fake_group_refs), patch.object(
+                report,
+                "get_layer_group_detail",
+                side_effect=fake_group_detail,
+            ):
+                rows, _referenced_roots, _referenced_files = report.inventory_stores(
+                    client=object(),
+                    data_dir=temp_dir,
+                    excluded_workspaces=set(),
+                    catalog_source="filesystem",
+                )
+
+            self.assertIn("Warning: layer(s) are used by layer group(s):", rows[0]["notes"])
+            self.assertIn("global_group", rows[0]["notes"])
+            self.assertIn("fast_ws/workspace_group", rows[0]["notes"])
+
+    def test_layer_group_lookup_failure_does_not_fail_inventory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = os.path.join(temp_dir, "data")
+            workspaces_root = os.path.join(temp_dir, "workspaces")
+            raster_dir = os.path.join(data_root, "fast_ws", "raster")
+            store_dir = os.path.join(workspaces_root, "fast_ws", "fast_store")
+            coverage_dir = os.path.join(store_dir, "fast_store")
+            os.makedirs(raster_dir, exist_ok=True)
+            os.makedirs(coverage_dir, exist_ok=True)
+
+            tif_path = os.path.join(raster_dir, "fast_store.tif")
+            with open(tif_path, "wb") as handle:
+                handle.write(b"mock")
+            with open(os.path.join(workspaces_root, "fast_ws", "workspace.xml"), "w", encoding="utf-8") as handle:
+                handle.write("<workspace><name>fast_ws</name></workspace>")
+            with open(os.path.join(store_dir, "coveragestore.xml"), "w", encoding="utf-8") as handle:
+                handle.write(
+                    "<coverageStore><name>fast_store</name><type>GeoTIFF</type>"
+                    "<url>file:data/fast_ws/raster/fast_store.tif</url></coverageStore>"
+                )
+            with open(os.path.join(coverage_dir, "coverage.xml"), "w", encoding="utf-8") as handle:
+                handle.write("<coverage><name>fast_layer</name></coverage>")
+
+            with patch.object(report, "list_layer_group_refs", side_effect=RuntimeError("layergroups unavailable")):
+                rows, _referenced_roots, _referenced_files = report.inventory_stores(
+                    client=object(),
+                    data_dir=temp_dir,
+                    excluded_workspaces=set(),
+                    catalog_source="filesystem",
+                )
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["status"], "ok")
+            self.assertEqual(rows[0]["notes"], "")
+
     def test_size_gb_is_rounded_to_two_decimals(self):
         row = report.build_row(
             row_kind="store",
@@ -178,6 +260,45 @@ class GeoServerStoreReportTests(unittest.TestCase):
             orphan_rows = report.collect_orphans(data_root, referenced_roots, referenced_files)
             orphan_paths = [row["resolved_path"] for row in orphan_rows]
             self.assertFalse(any("excluded_ws" in path for path in orphan_paths))
+
+    def test_orphans_skip_empty_directories_and_small_files_by_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = os.path.join(temp_dir, "data")
+            empty_dir = os.path.join(data_root, "empty")
+            small_file = os.path.join(data_root, "small.txt")
+            large_file = os.path.join(data_root, "large.bin")
+            os.makedirs(empty_dir, exist_ok=True)
+            os.makedirs(data_root, exist_ok=True)
+            with open(small_file, "wb") as handle:
+                handle.write(b"x" * 1024)
+            with open(large_file, "wb") as handle:
+                handle.write(b"x" * (101 * 1024))
+
+            orphan_rows = report.collect_orphans(data_root, [], set())
+            orphan_paths = {row["resolved_path"] for row in orphan_rows}
+
+            self.assertIn(large_file, orphan_paths)
+            self.assertNotIn(small_file, orphan_paths)
+            self.assertNotIn(empty_dir, orphan_paths)
+
+    def test_orphan_small_file_threshold_is_configurable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = os.path.join(temp_dir, "data")
+            os.makedirs(data_root, exist_ok=True)
+            small_file = os.path.join(data_root, "small.txt")
+            with open(small_file, "wb") as handle:
+                handle.write(b"x" * 1024)
+
+            default_rows = report.collect_orphans(data_root, [], set())
+            permissive_rows = report.collect_orphans(
+                data_root,
+                [],
+                set(),
+                small_file_threshold_bytes=512,
+            )
+
+            self.assertNotIn(small_file, {row["resolved_path"] for row in default_rows})
+            self.assertIn(small_file, {row["resolved_path"] for row in permissive_rows})
 
     def test_resolve_store_path_maps_windows_external_root_to_local_mount(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -319,6 +440,81 @@ class GeoServerStoreReportTests(unittest.TestCase):
             self.assertEqual(rows[0]["resolved_path"], tif_path)
             self.assertFalse(referenced_roots)
             self.assertIn(report.normalize_path(tif_path), referenced_files)
+
+    def test_inventory_uses_two_distinct_external_path_mappings(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            raster_root = os.path.join(temp_dir, "external_raster")
+            vector_root = os.path.join(temp_dir, "external_vector")
+            os.makedirs(raster_root, exist_ok=True)
+            os.makedirs(vector_root, exist_ok=True)
+            raster_path = os.path.join(raster_root, "roads.tif")
+            vector_path = os.path.join(vector_root, "parcels.gpkg")
+            with open(raster_path, "wb") as handle:
+                handle.write(b"raster")
+            with open(vector_path, "wb") as handle:
+                handle.write(b"vector")
+
+            mappings = report.parse_external_path_mappings(
+                json.dumps(
+                    {
+                        r"C:\external\raster": raster_root,
+                        r"D:\external\vector": vector_root,
+                    }
+                )
+            )
+
+            def fake_list_store_refs(_client, _workspace, store_kind):
+                if store_kind == "coveragestores":
+                    return ["roads"]
+                if store_kind == "datastores":
+                    return ["parcels"]
+                return []
+
+            def fake_get_store_detail(_client, _workspace, store_kind, store_name):
+                if store_kind == "coveragestores" and store_name == "roads":
+                    return {"type": "GeoTIFF", "url": r"C:\external\raster\roads.tif"}
+                if store_kind == "datastores" and store_name == "parcels":
+                    return {
+                        "type": "GeoPackage",
+                        "connectionParameters": {
+                            "entry": [
+                                {"@key": "database", "$": r"D:\external\vector\parcels.gpkg"}
+                            ]
+                        },
+                    }
+                raise AssertionError((store_kind, store_name))
+
+            def fake_list_store_layers(_client, _workspace, _store_kind, store_name):
+                return [store_name]
+
+            with patch.object(report, "list_workspaces", return_value=["ws"]), patch.object(
+                report,
+                "list_store_refs",
+                side_effect=fake_list_store_refs,
+            ), patch.object(
+                report,
+                "get_store_detail",
+                side_effect=fake_get_store_detail,
+            ), patch.object(
+                report,
+                "list_store_layers",
+                side_effect=fake_list_store_layers,
+            ):
+                rows, referenced_roots, referenced_files = report.inventory_stores(
+                    client=None,
+                    data_dir=temp_dir,
+                    excluded_workspaces=set(),
+                    external_path_mappings=mappings,
+                )
+
+            rows_by_store = {row["store_name"]: row for row in rows}
+            self.assertEqual(rows_by_store["roads"]["status"], "ok")
+            self.assertEqual(rows_by_store["roads"]["resolved_path"], raster_path)
+            self.assertEqual(rows_by_store["parcels"]["status"], "ok")
+            self.assertEqual(rows_by_store["parcels"]["resolved_path"], vector_path)
+            self.assertFalse(referenced_roots)
+            self.assertIn(report.normalize_path(raster_path), referenced_files)
+            self.assertIn(report.normalize_path(vector_path), referenced_files)
 
     def test_inventory_marks_mapped_external_root_as_missing_when_inaccessible(self):
         with tempfile.TemporaryDirectory() as temp_dir:

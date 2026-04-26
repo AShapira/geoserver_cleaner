@@ -22,7 +22,8 @@ def delete_store(settings: Settings, workspace: str, store_kind: str, store_name
     )
     workspace_q = quote(workspace, safe="")
     store_q = quote(store_name, safe="")
-    endpoint = "rest/workspaces/{}/{}/{}?recurse=true&purge=all".format(workspace_q, store_kind, store_q)
+    query = "recurse=true&purge=all" if store_kind == "coveragestores" else "recurse=true"
+    endpoint = "rest/workspaces/{}/{}/{}?{}".format(workspace_q, store_kind, store_q, query)
     url = urljoin(client.base_url, endpoint)
     request = Request(
         url,
@@ -90,6 +91,53 @@ def delete_store(settings: Settings, workspace: str, store_kind: str, store_name
         )
         raise RuntimeError(
             "GeoServer delete failed for {}/{} ({}): {}".format(
+                workspace,
+                store_name,
+                store_kind,
+                exc.reason,
+            )
+        ) from exc
+
+
+def store_exists(settings: Settings, workspace: str, store_kind: str, store_name: str) -> bool:
+    client = GeoServerClient(
+        base_url=settings.geoserver_url,
+        username=settings.geoserver_username,
+        password=settings.geoserver_password,
+        timeout=settings.timeout,
+        insecure=settings.insecure,
+    )
+    workspace_q = quote(workspace, safe="")
+    store_q = quote(store_name, safe="")
+    endpoint = "rest/workspaces/{}/{}/{}.json".format(workspace_q, store_kind, store_q)
+    url = urljoin(client.base_url, endpoint)
+    request = Request(
+        url,
+        method="GET",
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with client.opener.open(request, timeout=client.timeout):
+            return True
+    except HTTPError as exc:
+        if exc.code == 404:
+            return False
+        detail = exc.read().decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(
+            "GeoServer store verification failed with HTTP {} for {}/{} ({}): {}".format(
+                exc.code,
+                workspace,
+                store_name,
+                store_kind,
+                detail,
+            )
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(
+            "GeoServer store verification failed for {}/{} ({}): {}".format(
                 workspace,
                 store_name,
                 store_kind,

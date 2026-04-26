@@ -27,7 +27,7 @@ HTML_COLUMNS = [
     ("size_gb", "Size (GB)", "number"),
     ("file_count", "Files", "number"),
     ("status", "Status", "text"),
-    ("notes", "Notes", "text"),
+    ("notes", "Remarks", "text"),
 ]
 
 def write_csv(path: str, rows: Sequence[dict]) -> None:

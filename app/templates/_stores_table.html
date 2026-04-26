@@ -2,7 +2,6 @@
   <div class="table-toolbar">
     <div class="table-summary">
       Showing {{ table_state.rows|length }} rows on page {{ table_state.page }} of {{ table_state.total_pages }}.
-      {{ table_state.total }} filtered row(s) in total.
     </div>
     <div class="pager">
       <a class="ghost-button {% if table_state.page == 1 %}disabled-link{% endif %}" href="{{ table_state.page_links.first }}" hx-get="{{ table_state.page_links.first }}" hx-target="#storesTableShell" hx-push-url="true">First</a>
@@ -26,7 +25,7 @@
           <th><a href="{{ table_state.sort_links.status }}" hx-get="{{ table_state.sort_links.status }}" hx-target="#storesTableShell" hx-push-url="true">Status</a></th>
           <th>Layers</th>
           <th>Resolved Path</th>
-          <th>Notes</th>
+          <th>Remarks</th>
         </tr>
       </thead>
       <tbody>

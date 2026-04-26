@@ -1,5 +1,5 @@
 param(
-    [string]$ImageTag = "2.5.0",
+    [string]$ImageTag = "2.7.0",
     [string]$ReportPath = "TASK_EXECUTION_REPORT.md",
     [switch]$KeepRunning
 )
