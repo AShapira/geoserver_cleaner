@@ -417,8 +417,51 @@ Important files:
 - [geoserver_test/docker-compose.geoserver-test.yml](c:/Alex/work/geoserver_cleaner/geoserver_test/docker-compose.geoserver-test.yml)
 - [geoserver_test/populate_geoserver_natural_earth.py](c:/Alex/work/geoserver_cleaner/geoserver_test/populate_geoserver_natural_earth.py)
 - [geoserver_test/populate_geoserver_bulk_mock.py](c:/Alex/work/geoserver_cleaner/geoserver_test/populate_geoserver_bulk_mock.py)
+- [geoserver_test/populate_external_mapping_demo.py](c:/Alex/work/geoserver_cleaner/geoserver_test/populate_external_mapping_demo.py)
 
 This fixture is for local testing only and is not part of the cleanup-app image build context.
+
+### External mapping demo
+
+The external mapping demo validates two separate behaviors:
+
+- inventory can resolve GeoServer catalog paths that point outside `GEOSERVER_DATA_DIR`
+- deletion always uses GeoServer REST, with `purge=all` only for internal coverage-store data and `purge=none` for mapped external coverage-store data
+
+Run it from PowerShell:
+
+```powershell
+.\scripts\run-external-mapping-demo.ps1
+```
+
+Stop the demo containers:
+
+```powershell
+.\scripts\run-external-mapping-demo.ps1 -Down
+```
+
+The demo creates local ignored fixture data under:
+
+- `geoserver_test/geoserver_data`
+- `geoserver_test/external_data`
+- `app_data/external_mapping_demo`
+
+The cleaner container maps:
+
+```json
+{
+  "C:\\demo_geodata\\windows": "/external_windows",
+  "/srv/geodata/posix": "/external_posix",
+  "C:\\demo_geodata\\missing": "/external_missing"
+}
+```
+
+Expected validation:
+
+- `internal_raster` previews as `Delete Data = Yes`
+- `windows_external_raster` and `posix_external_raster` preview as configuration-only
+- external files still exist after delete execution
+- cleaner logs show both `purge=all` for internal data and `purge=none` for external data
 
 ## Limitations
 

@@ -233,7 +233,13 @@ def execute_delete_job(
             )
         else:
             try:
-                geoserver.delete_store(settings, item.workspace, item.store_kind, item.store_name)
+                geoserver.delete_store(
+                    settings,
+                    item.workspace,
+                    item.store_kind,
+                    item.store_name,
+                    purge_data=item.can_delete_data,
+                )
                 deleted_store_keys.append("{}/{}".format(item.workspace, item.store_name))
                 try:
                     if geoserver.store_exists(settings, item.workspace, item.store_kind, item.store_name):

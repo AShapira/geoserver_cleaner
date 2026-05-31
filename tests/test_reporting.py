@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -9,6 +10,7 @@ from unittest.mock import patch
 from app.reporting import cli as report_cli
 from app.reporting import core as report
 from app.reporting import render as report_render
+from geoserver_test import populate_external_mapping_demo as mapping_demo
 
 
 class GeoServerStoreReportTests(unittest.TestCase):
@@ -575,6 +577,69 @@ class GeoServerStoreReportTests(unittest.TestCase):
 
             self.assertEqual(rows[0]["status"], "missing")
             self.assertEqual(rows[0]["notes"], "Resolved path does not exist on disk.")
+
+    def test_external_mapping_demo_fixture_exercises_internal_and_mapped_external_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base_dir = os.path.abspath(temp_dir)
+            prepared = mapping_demo.prepare_fixture(Path(base_dir))
+            mappings = report.parse_external_path_mappings(
+                json.dumps(prepared["local_external_path_mappings"])
+            )
+
+            rows, referenced_roots, referenced_files = report.inventory_stores(
+                client=None,
+                data_dir=str(prepared["data_dir"]),
+                excluded_workspaces=set(),
+                catalog_source="filesystem",
+                workers=2,
+                external_path_mappings=mappings,
+            )
+            rows_by_store = {row["store_name"]: row for row in rows}
+
+            internal_path = os.path.join(
+                str(prepared["data_dir"]),
+                "data",
+                mapping_demo.WORKSPACE,
+                "internal",
+                "internal.tif",
+            )
+            windows_path = os.path.join(
+                base_dir,
+                "geoserver_test",
+                "external_data",
+                "windows",
+                "mapped_windows.tif",
+            )
+            posix_path = os.path.join(
+                base_dir,
+                "geoserver_test",
+                "external_data",
+                "posix",
+                "mapped_posix.tif",
+            )
+
+            self.assertEqual(rows_by_store[mapping_demo.INTERNAL_STORE]["status"], "ok")
+            self.assertEqual(rows_by_store[mapping_demo.INTERNAL_STORE]["resolved_path"], internal_path)
+            self.assertEqual(rows_by_store[mapping_demo.WINDOWS_STORE]["status"], "ok")
+            self.assertEqual(rows_by_store[mapping_demo.WINDOWS_STORE]["resolved_path"], windows_path)
+            self.assertEqual(rows_by_store[mapping_demo.POSIX_STORE]["status"], "ok")
+            self.assertEqual(rows_by_store[mapping_demo.POSIX_STORE]["resolved_path"], posix_path)
+            self.assertEqual(rows_by_store[mapping_demo.MISSING_STORE]["status"], "missing")
+            self.assertIn("Mapped external root", rows_by_store[mapping_demo.MISSING_STORE]["notes"])
+
+            self.assertFalse(referenced_roots)
+            self.assertIn(report.normalize_path(internal_path), referenced_files)
+            self.assertIn(report.normalize_path(windows_path), referenced_files)
+            self.assertIn(report.normalize_path(posix_path), referenced_files)
+            orphan_rows = report.collect_orphans(
+                os.path.join(str(prepared["data_dir"]), "data"),
+                referenced_roots,
+                referenced_files,
+            )
+            self.assertFalse(
+                any("external_data" in row["resolved_path"] for row in orphan_rows),
+                "external mapped data must not be included in internal orphan detection",
+            )
 
     def test_html_report_is_generated_with_sorting_ui(self):
         rows = [

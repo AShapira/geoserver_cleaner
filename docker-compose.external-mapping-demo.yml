@@ -1,0 +1,40 @@
+services:
+  geoserver_external_mapping_demo:
+    image: docker.osgeo.org/geoserver:2.28.0
+    ports:
+      - "8081:8080"
+    environment:
+      SKIP_DEMO_DATA: "true"
+    volumes:
+      - ./geoserver_test/geoserver_data:/opt/geoserver_data
+      - ./geoserver_test/external_data/posix:/srv/geodata/posix
+    restart: unless-stopped
+
+  geoserver-cleaner-external-mapping-demo:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    depends_on:
+      - geoserver_external_mapping_demo
+    ports:
+      - "8000:8000"
+    environment:
+      GEOSERVER_URL: http://geoserver_external_mapping_demo:8080/geoserver
+      GEOSERVER_USER: admin
+      GEOSERVER_PASSWORD: geoserver
+      GEOSERVER_DATA_DIR: /geoserver_data
+      GEOSERVER_EXTERNAL_PATH_MAPPINGS: '{"C:\\demo_geodata\\windows":"/external_windows","/srv/geodata/posix":"/external_posix","C:\\demo_geodata\\missing":"/external_missing"}'
+      GEOSERVER_CATALOG_SOURCE: filesystem
+      GEOSERVER_EXCLUDE_WORKSPACES: ""
+      APP_DATABASE_PATH: /app_data/geoserver_cleaner.sqlite3
+      APP_EXPORT_DIR: /app_exports
+      APP_ENABLE_MCP_HTTP: "true"
+      APP_LOG_LEVEL: INFO
+      APP_LOG_PATH: /app_data/logs/geoserver_cleaner.log
+      APP_ORPHAN_SMALL_FILE_THRESHOLD_BYTES: "1"
+    volumes:
+      - ./geoserver_test/geoserver_data:/geoserver_data
+      - ./geoserver_test/external_data/windows:/external_windows
+      - ./geoserver_test/external_data/posix:/external_posix
+      - ./app_data/external_mapping_demo:/app_data
+      - ./reports/external_mapping_demo:/app_exports

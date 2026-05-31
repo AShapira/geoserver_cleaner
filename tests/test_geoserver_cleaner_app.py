@@ -461,7 +461,7 @@ class GeoServerCleanerAppTests(unittest.TestCase):
                 ],
             )
             row = module.db.get_run_rows(module.SETTINGS.database_path, run_id)[0]
-            with patch.object(module.deletion.geoserver, "delete_store", return_value=None), patch.object(
+            with patch.object(module.deletion.geoserver, "delete_store", return_value=None) as mock_delete_store, patch.object(
                 module.deletion.geoserver,
                 "store_exists",
                 return_value=False,
@@ -473,6 +473,13 @@ class GeoServerCleanerAppTests(unittest.TestCase):
                     [int(row["id"])],
                 )
             self.assertTrue(os.path.exists(data_path))
+            mock_delete_store.assert_called_once_with(
+                module.SETTINGS,
+                "raster",
+                "coveragestores",
+                "demo",
+                purge_data=True,
+            )
             self.assertEqual(result["deleted_count"], 1)
             self.assertEqual(result["verified_deleted_count"], 1)
             self.assertEqual(result["snapshot_rows_removed"], 1)
@@ -505,6 +512,46 @@ class GeoServerCleanerAppTests(unittest.TestCase):
             self.assertEqual(result["snapshot_rows_removed"], 0)
             self.assertEqual(result["verification_failed_count"], 1)
             self.assertEqual(len(module.db.get_run_rows(module.SETTINGS.database_path, run_id)), 1)
+
+    def test_execute_delete_job_uses_purge_none_for_external_coverage_store(self):
+        with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as external_dir:
+            external_path = os.path.join(external_dir, "external.tif")
+            open(external_path, "wb").close()
+            module = self.load_app(temp_dir)
+            run_id = self.seed_run(
+                module,
+                [
+                    self.make_row(
+                        temp_dir,
+                        resolved_path=external_path,
+                        normalized_path=os.path.normcase(os.path.normpath(external_path)),
+                        configured_path=external_path,
+                    )
+                ],
+            )
+            row = module.db.get_run_rows(module.SETTINGS.database_path, run_id)[0]
+            with patch.object(module.deletion.geoserver, "delete_store", return_value=None) as mock_delete_store, patch.object(
+                module.deletion.geoserver,
+                "store_exists",
+                return_value=False,
+            ):
+                result = module.deletion.execute_delete_job(
+                    module.SETTINGS.database_path,
+                    module.SETTINGS,
+                    run_id,
+                    [int(row["id"])],
+                )
+
+            mock_delete_store.assert_called_once_with(
+                module.SETTINGS,
+                "raster",
+                "coveragestores",
+                "demo",
+                purge_data=False,
+            )
+            self.assertTrue(os.path.exists(external_path))
+            self.assertEqual(result["deleted_count"], 1)
+            self.assertEqual(result["delete_data_count"], 0)
 
     def test_scan_route_passes_excluded_workspaces_to_job_manager(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -723,10 +770,32 @@ class GeoServerCleanerAppTests(unittest.TestCase):
                     "raster",
                     "coveragestores",
                     "demo store",
+                    purge_data=True,
                 )
             self.assertIsNotNone(dummy_client.opener.request)
             self.assertIn("recurse=true", dummy_client.opener.request.full_url)
             self.assertIn("purge=all", dummy_client.opener.request.full_url)
+
+    def test_geoserver_delete_uses_recurse_and_purge_none_for_external_coverage_stores(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            module = self.load_app(temp_dir)
+            dummy_client = DummyClient("http://example.test/geoserver/", module.SETTINGS.timeout)
+            with patch.object(
+                module.deletion.geoserver,
+                "GeoServerClient",
+                return_value=dummy_client,
+            ):
+                module.deletion.geoserver.delete_store(
+                    module.SETTINGS,
+                    "raster",
+                    "coveragestores",
+                    "demo store",
+                    purge_data=False,
+                )
+            self.assertIsNotNone(dummy_client.opener.request)
+            self.assertIn("recurse=true", dummy_client.opener.request.full_url)
+            self.assertIn("purge=none", dummy_client.opener.request.full_url)
+            self.assertNotIn("purge=all", dummy_client.opener.request.full_url)
 
     def test_geoserver_delete_uses_recurse_only_for_datastores(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -742,6 +811,7 @@ class GeoServerCleanerAppTests(unittest.TestCase):
                     "vector",
                     "datastores",
                     "demo store",
+                    purge_data=True,
                 )
             self.assertIsNotNone(dummy_client.opener.request)
             self.assertIn("recurse=true", dummy_client.opener.request.full_url)

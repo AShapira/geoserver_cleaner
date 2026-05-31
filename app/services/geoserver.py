@@ -12,7 +12,13 @@ from app.reporting.core import GeoServerClient
 LOGGER = logging.getLogger("geoserver_cleaner.geoserver")
 
 
-def delete_store(settings: Settings, workspace: str, store_kind: str, store_name: str) -> None:
+def delete_store(
+    settings: Settings,
+    workspace: str,
+    store_kind: str,
+    store_name: str,
+    purge_data: bool = False,
+) -> None:
     client = GeoServerClient(
         base_url=settings.geoserver_url,
         username=settings.geoserver_username,
@@ -22,7 +28,11 @@ def delete_store(settings: Settings, workspace: str, store_kind: str, store_name
     )
     workspace_q = quote(workspace, safe="")
     store_q = quote(store_name, safe="")
-    query = "recurse=true&purge=all" if store_kind == "coveragestores" else "recurse=true"
+    if store_kind == "coveragestores":
+        purge = "all" if purge_data else "none"
+        query = "recurse=true&purge={}".format(purge)
+    else:
+        query = "recurse=true"
     endpoint = "rest/workspaces/{}/{}/{}?{}".format(workspace_q, store_kind, store_q, query)
     url = urljoin(client.base_url, endpoint)
     request = Request(
@@ -42,6 +52,7 @@ def delete_store(settings: Settings, workspace: str, store_kind: str, store_name
             "store_kind": store_kind,
             "url": url,
             "timeout": client.timeout,
+            "purge_data": purge_data,
         },
     )
     try:
