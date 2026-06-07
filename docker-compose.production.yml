@@ -4,6 +4,13 @@ services:
     restart: unless-stopped
     ports:
       - "${APP_PORT:-8000}:8000"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m
     environment:
       GEOSERVER_URL: ${GEOSERVER_URL}
       GEOSERVER_USER: ${GEOSERVER_USER}
@@ -28,7 +35,7 @@ services:
       APP_LOG_BACKUP_COUNT: ${APP_LOG_BACKUP_COUNT:-5}
       APP_ORPHAN_SMALL_FILE_THRESHOLD_BYTES: ${APP_ORPHAN_SMALL_FILE_THRESHOLD_BYTES:-102400}
     volumes:
-      - ${GEOSERVER_DATA_DIR_HOST}:/geoserver_data
+      - ${GEOSERVER_DATA_DIR_HOST}:/geoserver_data:ro
       # Example:
       # GEOSERVER_EXTERNAL_PATH_MAPPINGS={"C:\\data\\osm":"/ext_data_path"}
       # GEOSERVER_EXTERNAL_OSM_HOST=/host/path/to/osm
