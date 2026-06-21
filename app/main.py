@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextlib
 import logging
 import math
 import os
@@ -16,7 +15,6 @@ from fastapi.templating import Jinja2Templates
 
 from app import db
 from app.config import Settings
-from app.mcp.server import build_streamable_http_server
 from app.runtime import AppRuntime, build_runtime
 from app.services import deletion, job_status, snapshots
 
@@ -38,46 +36,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         extra={
             "event": "web_app_create",
             "app_title": runtime.settings.app_title,
-            "mcp_http_enabled": runtime.settings.enable_mcp_http,
-            "mcp_http_path": runtime.settings.mcp_http_path,
         },
     )
-
-    @contextlib.asynccontextmanager
-    async def lifespan(_: FastAPI):
-        LOGGER.info(
-            "FastAPI lifespan starting",
-            extra={"event": "web_app_lifespan_start"},
-        )
-        if runtime.settings.enable_mcp_http:
-            mcp_server = build_streamable_http_server(runtime)
-            app.state.mcp_server = mcp_server
-            LOGGER.info(
-                "MCP HTTP enabled",
-                extra={
-                    "event": "mcp_http_enabled",
-                    "mcp_http_path": runtime.settings.mcp_http_path,
-                },
-            )
-            async with mcp_server.session_manager.run():
-                yield
-            app.state.mcp_server = None
-            LOGGER.info(
-                "FastAPI lifespan stopping",
-                extra={"event": "web_app_lifespan_stop"},
-            )
-            return
-        LOGGER.info(
-            "MCP HTTP disabled",
-            extra={"event": "mcp_http_disabled"},
-        )
-        yield
-        LOGGER.info(
-            "FastAPI lifespan stopping",
-            extra={"event": "web_app_lifespan_stop"},
-        )
-
-    app.router.lifespan_context = lifespan
     app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
     app.state.runtime = runtime
     app.state.settings = runtime.settings
@@ -138,19 +98,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
         return response
-
-    if runtime.settings.enable_mcp_http:
-        async def mcp_http_asgi(scope, receive, send) -> None:
-            root_path = scope.get("root_path", "")
-            path = scope.get("path", "")
-            if path not in {root_path, root_path + "/"}:
-                await send({"type": "http.response.start", "status": 404, "headers": []})
-                await send({"type": "http.response.body", "body": b""})
-                return
-            mcp_server = app.state.mcp_server
-            await mcp_server.session_manager.handle_request(scope, receive, send)
-
-        app.mount(runtime.settings.mcp_http_path, mcp_http_asgi)
     return app
 
 

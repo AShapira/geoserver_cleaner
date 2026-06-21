@@ -30,8 +30,6 @@ def build_runtime(settings: Settings | None = None) -> AppRuntime:
             "export_dir": runtime_settings.export_dir,
             "catalog_source": runtime_settings.catalog_source,
             "workers": runtime_settings.workers,
-            "mcp_http_enabled": runtime_settings.enable_mcp_http,
-            "mcp_http_path": runtime_settings.mcp_http_path,
             "log_level": runtime_settings.app_log_level,
             "log_path": runtime_settings.app_log_path,
         },

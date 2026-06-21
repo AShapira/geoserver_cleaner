@@ -14,7 +14,6 @@ $reportFile = Join-Path $root $ReportPath
 $tempEnvFile = Join-Path ([System.IO.Path]::GetTempPath()) ("geoserver-cleaner-validation-{0}.env" -f ([Guid]::NewGuid().ToString("N")))
 $imageRef = "ghcr.io/ashapira/geoserver-cleaner:$ImageTag"
 $appServiceName = "geoserver-cleaner"
-$mcpUrl = "http://127.0.0.1:8000/mcp/"
 $storesUrl = "http://127.0.0.1:8000/stores"
 $csvUrl = "http://127.0.0.1:8000/reports/latest.csv"
 $scanUrl = "http://127.0.0.1:8000/scan"
@@ -216,7 +215,6 @@ try {
     $deadline = (Get-Date).AddMinutes(5)
     $geoserverResponse = Wait-HttpReady -Name "GeoServer fixture" -Url $geoserverUrl -Deadline $deadline
     $storesResponse = Wait-HttpReady -Name "GeoServer Cleaner UI" -Url $storesUrl -Deadline $deadline
-    $mcpResponse = Wait-HttpReady -Name "GeoServer Cleaner MCP" -Url $mcpUrl -Deadline $deadline -AcceptAnyHttpResponse
 
     $scanResponse = Invoke-WebRequest -Uri $scanUrl -Method Post -Body @{ exclude_workspaces = "" } -UseBasicParsing -TimeoutSec 30
     if (-not $scanResponse) {
@@ -243,7 +241,6 @@ try {
 
     $summaryLines.Add("- GeoServer fixture status: HTTP $([int]$geoserverResponse.StatusCode)")
     $summaryLines.Add("- UI status: HTTP $([int]$storesResponse.StatusCode)")
-    $summaryLines.Add("- MCP status: HTTP $([int]$mcpResponse.StatusCode)")
     $summaryLines.Add(('- Inventory scan request: HTTP {0} redirect to `{1}`' -f $scanStatusCode, $jobLocation))
     $summaryLines.Add(('- Inventory scan job id: `{0}`' -f $jobId))
     $summaryLines.Add(('- CSV export status: HTTP {0}' -f [int]$csvResponse.StatusCode))
@@ -252,7 +249,7 @@ try {
 
     $logLines = $appLogsText -split "`r?`n"
     foreach ($line in $logLines) {
-        if ($line -match "Starting runtime entrypoint|Database initialized|Application runtime initialized|Creating FastAPI application|Configured MCP streamable HTTP app|MCP HTTP enabled|Uvicorn running|Inventory scan completed|CSV export requested") {
+        if ($line -match "Starting runtime entrypoint|Database initialized|Application runtime initialized|Creating FastAPI application|Uvicorn running|Inventory scan completed|CSV export requested") {
             $logSummary.Add($line)
         }
     }
@@ -308,7 +305,6 @@ try {
         ('- Validation env source: `.env.production.local` with `GEOSERVER_CLEANER_TAG={0}` forced in a temporary env file' -f $ImageTag),
         '- GeoServer base URL during validation: `http://127.0.0.1:8081/geoserver`',
         ('- Web UI endpoint: `{0}`' -f $storesUrl),
-        ('- MCP endpoint: `{0}`' -f $mcpUrl),
         "",
         "## Executed Checks",
         ""
@@ -317,7 +313,6 @@ try {
         "## Scan and Endpoint Results",
         "",
         '- `/stores` responded successfully and served the web UI.',
-        '- `/mcp/` was reachable with HTTP MCP enabled.',
         '- A fresh inventory scan was triggered over HTTP and reached the completed state.',
         '- `/reports/latest.csv` responded successfully after the scan completed.',
         '- The running app used the published GHCR image rather than a local build.',
@@ -330,7 +325,7 @@ try {
         "",
         "## Isolated-Network Readiness Conclusion",
         "",
-        ('The published image `ghcr.io/ashapira/geoserver-cleaner:{0}` started successfully with the production compose file, served `/stores` and `/mcp/`, completed an inventory scan against the configured GeoServer fixture, and served a snapshot export. The runtime validation and codebase behavior indicate that steady-state network dependency is the configured GeoServer endpoint rather than external internet services.' -f $ImageTag),
+        ('The published image `ghcr.io/ashapira/geoserver-cleaner:{0}` started successfully with the production compose file, served `/stores`, completed an inventory scan against the configured GeoServer fixture, and served a snapshot export. The runtime validation and codebase behavior indicate that steady-state network dependency is the configured GeoServer endpoint rather than external internet services.' -f $ImageTag),
         "",
         'This validation did not add a host-level firewall block; the conclusion is based on successful execution of the published image, the captured container logs, and the repo code paths that only initiate outbound HTTP toward `GEOSERVER_URL` during normal operation.',
         "",

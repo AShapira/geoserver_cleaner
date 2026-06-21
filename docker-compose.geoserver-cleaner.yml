@@ -14,7 +14,6 @@ services:
       GEOSERVER_CATALOG_SOURCE: filesystem
       GEOSERVER_EXCLUDE_WORKSPACES: ""
       APP_DATABASE_PATH: /app_data/geoserver_cleaner.sqlite3
-      APP_ENABLE_MCP_HTTP: "true"
       APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
       APP_LOG_PATH: ${APP_LOG_PATH:-/app_data/logs/geoserver_cleaner.log}
       APP_LOG_MAX_BYTES: ${APP_LOG_MAX_BYTES:-10485760}

@@ -59,9 +59,7 @@ $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 
 Wait-HttpReady -Name "GeoServer test fixture" -Url "http://127.0.0.1:8081/geoserver/web/" -Deadline $deadline
 Wait-HttpReady -Name "GeoServer Cleaner UI" -Url "http://127.0.0.1:8000/stores" -Deadline $deadline
-Wait-HttpReady -Name "GeoServer Cleaner MCP" -Url "http://127.0.0.1:8000/mcp/" -Deadline $deadline -AcceptAnyHttpResponse
 
 Write-Host ""
 Write-Host "Local production flow is running."
 Write-Host "Web UI: http://127.0.0.1:8000/stores"
-Write-Host "MCP HTTP: http://127.0.0.1:8000/mcp/"
